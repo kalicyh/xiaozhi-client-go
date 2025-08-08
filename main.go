@@ -13,6 +13,7 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
+	
 	if err := wails.Run(&options.App{
 		Title:  "xiaozhi_client-go",
 		Width:  1024,

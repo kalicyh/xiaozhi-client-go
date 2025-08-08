@@ -136,6 +136,16 @@ function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connectin
         <label style={{marginLeft:8}}>DeviceID</label><input value={form.device_id} onChange={e=>set('device_id', e.target.value)} />
       </div>
       <div className="row"><label>Token</label><input value={form.token} onChange={e=>set('token', e.target.value)} disabled={!toBool(form.enable_token)} /></div>
+      {toBool(form.enable_token) && (
+        <div className="row">
+          <label>Token方式</label>
+          <select value={form.token_method || 'header'} onChange={e=>set('token_method', e.target.value)}>
+            <option value="header">Header Authorization</option>
+            <option value="query_access_token">Query参数 access_token</option>
+            <option value="query_token">Query参数 token</option>
+          </select>
+        </div>
+      )}
     </div>
   )
 }
@@ -184,7 +194,7 @@ function App() {
         mac: 'dc:da:0c:8f:d6:fc'
       }
     }, null, 2),
-    broker: '', pub: 'devices/+/tx', sub: 'devices/+/rx', username: '', password: '', client_id: '', device_id: '', token: ''
+    broker: '', pub: 'devices/+/tx', sub: 'devices/+/rx', username: '', password: '', client_id: '', device_id: '', token: '', token_method: 'header'
   }))
   const [pttTime, setPttTime] = useState(0)
   const [connecting, setConnecting] = useState(false)

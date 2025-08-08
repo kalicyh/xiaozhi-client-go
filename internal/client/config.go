@@ -37,6 +37,7 @@ type Config struct {
 	DeviceID        string
 	AuthToken       string
 	EnableToken     bool
+	TokenMethod     string // "header", "query_access_token", "query_token"
 	ProtocolVersion int
 	Audio           AudioParams
 	HelloTimeout    time.Duration
@@ -54,7 +55,8 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		ProtocolVersion: 3,
+		ProtocolVersion: 1,
+		TokenMethod:     "header", // 默认使用 Authorization 头
 		Audio: AudioParams{Format: "opus", SampleRate: 16000, Channels: 1, FrameDuration: 60},
 		HelloTimeout:    10 * time.Second,
 		MQTTPublishTopic:   "devices/+/tx",

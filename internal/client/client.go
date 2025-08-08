@@ -28,7 +28,7 @@ type Client struct {
 	OnError   func(ctx context.Context, err error)
 	OnClosed  func()
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	helloCh chan struct{}
 }
 
@@ -53,70 +53,222 @@ func (c *Client) SwitchProtocol(ctx context.Context, protocol string) error {
 }
 
 func (c *Client) OpenWebsocket(ctx context.Context) error {
-	if c.cfg.WebsocketURL == "" { return errors.New("websocket url required") }
-	wsURL := c.cfg.WebsocketURL
-	// 1) 补 /ws
-	if u, err := url.Parse(wsURL); err == nil && u != nil {
-		if strings.HasSuffix(u.Path, "/v1") || strings.HasSuffix(u.Path, "/v1/") {
-			if strings.HasSuffix(u.Path, "/") { u.Path = u.Path + "ws" } else { u.Path = u.Path + "/ws" }
-			wsURL = u.String()
-		}
+	if c.cfg.WebsocketURL == "" {
+		return errors.New("websocket url required")
 	}
-	// 2) token 放入 access_token（优先 query，避免 Authorization）
-	if c.cfg.EnableToken && c.cfg.AuthToken != "" {
-		if u, err := url.Parse(wsURL); err == nil && u != nil {
-			q := u.Query(); if q.Get("token") == "" && q.Get("access_token") == "" { q.Set("access_token", c.cfg.AuthToken) }
-			u.RawQuery = q.Encode()
-			wsURL = u.String()
-		}
-	}
-	// 3) 仅设置 Origin 头
-	headers := map[string]string{}
-	if o := originFromWSURL(wsURL); o != "" { headers["Origin"] = o }
+	baseURL := c.cfg.WebsocketURL
 
-	w := transport.NewWebsocketTransport(wsURL, transport.Handlers{
-		OnText:   func(ctx context.Context, text []byte) { c.onWSMessage(ctx, text) },
-		OnBinary: func(ctx context.Context, data []byte) { if c.OnBinary != nil { c.OnBinary(ctx, data) } },
-		OnError:  func(ctx context.Context, err error) { if c.OnError != nil { c.OnError(ctx, err) } },
-		OnClosed: func() { if c.OnClosed != nil { c.OnClosed() } },
+	// 构造鉴权配置
+	type attempt struct {
+		url            string
+		headers        map[string]string
+		tokenPlacement string
+	}
+	
+	var att attempt
+
+	// 公共头
+	commonHeaders := map[string]string{
+		"Protocol-Version": "1",
+	}
+	if c.cfg.DeviceID != "" {
+		commonHeaders["Device-Id"] = c.cfg.DeviceID
+	}
+	if c.cfg.ClientID != "" {
+		commonHeaders["Client-Id"] = c.cfg.ClientID
+	}
+
+	// 根据用户选择的方式携带 token
+	if c.cfg.EnableToken && c.cfg.AuthToken != "" {
+		switch c.cfg.TokenMethod {
+		case "header":
+			// Authorization 头
+			h := make(map[string]string, len(commonHeaders)+1)
+			for k, v := range commonHeaders {
+				h[k] = v
+			}
+			h["Authorization"] = "Bearer " + c.cfg.AuthToken
+			att = attempt{
+				url:            baseURL,
+				headers:        h,
+				tokenPlacement: "header:authorization",
+			}
+		case "query_access_token":
+			// query: access_token
+			if u, err := url.Parse(baseURL); err == nil && u != nil {
+				q := u.Query()
+				q.Set("access_token", c.cfg.AuthToken)
+				u.RawQuery = q.Encode()
+				h := make(map[string]string, len(commonHeaders))
+				for k, v := range commonHeaders {
+					h[k] = v
+				}
+				att = attempt{
+					url:            u.String(),
+					headers:        h,
+					tokenPlacement: "query:access_token",
+				}
+			}
+		case "query_token":
+			// query: token
+			if u, err := url.Parse(baseURL); err == nil && u != nil {
+				q := u.Query()
+				q.Set("token", c.cfg.AuthToken)
+				u.RawQuery = q.Encode()
+				h := make(map[string]string, len(commonHeaders))
+				for k, v := range commonHeaders {
+					h[k] = v
+				}
+				att = attempt{
+					url:            u.String(),
+					headers:        h,
+					tokenPlacement: "query:token",
+				}
+			}
+		default:
+			// 默认使用 Authorization 头
+			h := make(map[string]string, len(commonHeaders)+1)
+			for k, v := range commonHeaders {
+				h[k] = v
+			}
+			h["Authorization"] = "Bearer " + c.cfg.AuthToken
+			att = attempt{
+				url:            baseURL,
+				headers:        h,
+				tokenPlacement: "header:authorization",
+			}
+		}
+	} else {
+		// 无鉴权
+		att = attempt{
+			url:            baseURL,
+			headers:        commonHeaders,
+			tokenPlacement: "none",
+		}
+	}
+
+	// 脱敏 URL/Headers 助手
+	sanitizeURL := func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil || u == nil {
+			return raw
+		}
+		q := u.Query()
+		for _, k := range []string{"access_token", "token"} {
+			if q.Has(k) {
+				q.Set(k, "***")
+			}
+		}
+		u.RawQuery = q.Encode()
+		return u.String()
+	}
+	sanitizeHeaders := func(h map[string]string) map[string]string {
+		out := make(map[string]string, len(h))
+		for k, v := range h {
+			if strings.EqualFold(k, "Authorization") {
+				if strings.HasPrefix(v, "Bearer ") {
+					out[k] = "Bearer ***"
+				} else {
+					out[k] = "***"
+				}
+			} else {
+				out[k] = v
+			}
+		}
+		return out
+	}
+
+	helloSent := false
+	helloRecv := false
+
+	// 在尝试前输出请求内容（已脱敏）
+	fmt.Printf("ws open: url=%s; headers=%v; token=%s\n", sanitizeURL(att.url), sanitizeHeaders(att.headers), att.tokenPlacement)
+
+	report := func(phase string, base error) error {
+		diag := fmt.Errorf("ws %s: %v; url=%s; helloSent=%v; serverHello=%v; token=%s", phase, base, sanitizeURL(att.url), helloSent, helloRecv, att.tokenPlacement)
+		if c.OnError != nil {
+			c.OnError(ctx, diag)
+		}
+		return diag
+	}
+
+	w := transport.NewWebsocketTransport(att.url, transport.Handlers{
+		OnText: func(ctx2 context.Context, text []byte) {
+			var msg map[string]any
+			if err := json.Unmarshal(text, &msg); err == nil {
+				if t, ok := msg["type"].(string); ok && t == "hello" {
+					if sid, ok := msg["session_id"].(string); ok {
+						c.SessionID = sid
+					}
+					helloRecv = true
+					c.mu.Lock()
+					ch := c.helloCh
+					c.helloCh = nil
+					c.mu.Unlock()
+					if ch != nil {
+						close(ch)
+					}
+				}
+				if c.OnJSON != nil {
+					c.OnJSON(ctx2, msg)
+				}
+			}
+		},
+		OnBinary: func(ctx2 context.Context, data []byte) {
+			if c.OnBinary != nil {
+				c.OnBinary(ctx2, data)
+			}
+		},
+		OnError: func(ctx2 context.Context, err error) {
+			_ = report("error", err)
+		},
+		OnClosed: func() {
+			if c.OnClosed != nil {
+				c.OnClosed()
+			}
+		},
 	})
+
 	c.ws = w
-	if err := c.ws.Open(ctx, headers); err != nil { if c.OnError != nil { c.OnError(ctx, err) }; return err }
-	// 发送 hello（webui 不带 transport 字段）
-	hello := HelloMessage{Type: "hello", Version: c.cfg.ProtocolVersion, AudioParams: c.cfg.Audio, Features: map[string]any{"mcp": true}}
+	if err := c.ws.Open(ctx, att.headers); err != nil {
+		return report("handshake", err)
+	}
+
+	// 发送 hello（version=1，含 transport=websocket）
+	hello := HelloMessage{
+		Type:        "hello",
+		Version:     c.cfg.ProtocolVersion,
+		Transport:   "websocket",
+		AudioParams: c.cfg.Audio,
+		Features:    map[string]any{"mcp": true},
+	}
 	b, _ := json.Marshal(hello)
-	if err := c.ws.SendText(ctx, b); err != nil { return err }
+
+	// 在发送前输出 hello payload
+	fmt.Printf("ws hello payload=%s\n", string(b))
+
+	if err := c.ws.SendText(ctx, b); err != nil {
+		_ = c.ws.Close()
+		return report("send-hello", err)
+	}
+	helloSent = true
+
 	// 等待服务端 hello
 	c.mu.Lock()
 	c.helloCh = make(chan struct{})
 	ch := c.helloCh
 	c.mu.Unlock()
+
 	select {
 	case <-ch:
 		return nil
 	case <-time.After(c.cfg.HelloTimeout):
-		err := errors.New("hello timeout")
 		_ = c.ws.Close()
-		if c.OnError != nil { c.OnError(ctx, err) }
-		return err
+		return report("hello-timeout", errors.New("hello timeout"))
 	case <-ctx.Done():
 		_ = c.ws.Close()
-		return ctx.Err()
+		return report("ctx-cancel", ctx.Err())
 	}
-}
-
-func (c *Client) onWSMessage(ctx context.Context, text []byte) {
-	var msg map[string]any
-	if err := json.Unmarshal(text, &msg); err != nil { return }
-	if t, ok := msg["type"].(string); ok && t == "hello" {
-		if sid, ok := msg["session_id"].(string); ok { c.SessionID = sid }
-		c.mu.Lock()
-		ch := c.helloCh
-		c.helloCh = nil
-		c.mu.Unlock()
-		if ch != nil { close(ch) }
-	}
-	if c.OnJSON != nil { c.OnJSON(ctx, msg) }
 }
 
 func (c *Client) OpenMQTT(ctx context.Context) error {
@@ -187,22 +339,55 @@ func (c *Client) SendAbort(ctx context.Context, reason string) error {
 }
 
 func (c *Client) Close() {
-	if c.udp != nil { _ = c.udp.Close() }
-	if c.ws != nil { _ = c.ws.Close() }
-	if c.mqtt != nil { _ = c.mqtt.Close() }
-	c.udp, c.ws, c.mqtt = nil, nil, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.udp != nil {
+		_ = c.udp.Close()
+		c.udp = nil
+	}
+	if c.ws != nil {
+		_ = c.ws.Close()
+		c.ws = nil
+	}
+	if c.mqtt != nil {
+		_ = c.mqtt.Close()
+		c.mqtt = nil
+	}
 	c.SessionID = ""
 }
 
-func (c *Client) SendOpusUpstream(_ context.Context, opus []byte) error {
-	if c.udp != nil { return c.udp.SendOpusFrame(opus) }
-	if c.ws != nil { return c.ws.SendBinary(context.Background(), opus) }
+func (c *Client) SendOpusUpstream(ctx context.Context, opus []byte) error {
+	c.mu.RLock()
+	udp := c.udp
+	ws := c.ws
+	c.mu.RUnlock()
+
+	if udp != nil {
+		return udp.SendOpusFrame(opus)
+	}
+	if ws != nil {
+		return ws.SendBinary(ctx, opus)
+	}
 	return errors.New("no audio channel")
 }
 
-func originFromWSURL(raw string) string {
-	u, err := url.Parse(raw); if err != nil { return "" }
-	scheme := "http"; if u.Scheme == "wss" { scheme = "https" }
-	if u.Host == "" { return "" }
-	return scheme + "://" + u.Host
+func (c *Client) IsConnected() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.ws != nil {
+		return c.ws.IsConnected()
+	}
+	if c.mqtt != nil {
+		// 可以添加MQTT连接状态检查
+		return c.mqtt != nil
+	}
+	return false
+}
+
+func (c *Client) GetSessionID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.SessionID
 }

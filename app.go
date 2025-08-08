@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -237,6 +240,52 @@ func (a *App) startup(ctx context.Context) {
 	runtime.EventsOn(ctx, "abort", func(args ...interface{}) { if a.client != nil { _ = a.client.SendAbort(context.Background(), "user") } })
 	// disconnect
 	runtime.EventsOn(ctx, "disconnect", func(args ...interface{}) { if a.client != nil { a.client.Close(); runtime.EventsEmit(a.ctx, "disconnected") } })
+	// OTA request
+	runtime.EventsOn(ctx, "ota_request", func(args ...interface{}) {
+		if len(args) == 1 {
+			var kv map[string]any
+			if m, ok := args[0].(map[string]any); ok {
+				kv = m
+			} else {
+				runtime.EventsEmit(a.ctx, "error", "invalid ota_request payload")
+				return
+			}
+			
+			otaURL := getStr(kv, "url")
+			deviceID := getStr(kv, "device_id")
+			
+			// 处理POST body
+			var postBody map[string]interface{}
+			if bodyData, ok := kv["body"]; ok {
+				switch t := bodyData.(type) {
+				case map[string]interface{}:
+					postBody = t
+				case string:
+					if err := json.Unmarshal([]byte(t), &postBody); err != nil {
+						runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("OTA POST body JSON解析失败: %v", err))
+						return
+					}
+				default:
+					runtime.EventsEmit(a.ctx, "error", "OTA POST body格式错误")
+					return
+				}
+			}
+			
+			if err := a.DoOTARequest(otaURL, deviceID, postBody); err != nil {
+				runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("OTA请求失败: %v", err))
+			}
+		}
+	})
+	
+	// 监听窗口状态变化
+	runtime.EventsOn(ctx, "window_state_change", func(args ...interface{}) {
+		if len(args) == 1 {
+			if state, ok := args[0].(string); ok {
+				// 发送窗口状态变化事件给前端
+				runtime.EventsEmit(a.ctx, "window_state_changed", state)
+			}
+		}
+	})
 }
 
 // Greet returns a greeting for the given name
@@ -252,5 +301,140 @@ func (a *App) SendTextMessage(text string) error {
 		return err
 	}
 	_ = a.store.SaveMessage(context.Background(), a.client.SessionID, "out", "detect", text, time.Now().Unix())
+	return nil
+}
+
+// GetWindowState 获取当前窗口状态
+func (a *App) GetWindowState() string {
+	if a.ctx == nil {
+		return "normal"
+	}
+	
+	// 检查窗口是否为全屏状态
+	isFullscreen := runtime.WindowIsFullscreen(a.ctx)
+	if isFullscreen {
+		return "fullscreen"
+	}
+	
+	// 检查窗口是否最大化
+	isMaximized := runtime.WindowIsMaximised(a.ctx)
+	if isMaximized {
+		return "maximized"
+	}
+	
+	// 检查窗口是否最小化
+	isMinimized := runtime.WindowIsMinimised(a.ctx)
+	if isMinimized {
+		return "minimized"
+	}
+	
+	return "normal"
+}
+
+// ToggleFullscreen 切换全屏状态
+func (a *App) ToggleFullscreen() {
+	if a.ctx == nil {
+		return
+	}
+	
+	isFullscreen := runtime.WindowIsFullscreen(a.ctx)
+	if isFullscreen {
+		runtime.WindowUnfullscreen(a.ctx)
+	} else {
+		runtime.WindowFullscreen(a.ctx)
+	}
+	
+	// 发送状态变化事件
+	go func() {
+		time.Sleep(100 * time.Millisecond) // 等待状态变化完成
+		newState := a.GetWindowState()
+		runtime.EventsEmit(a.ctx, "window_state_changed", newState)
+	}()
+}
+
+// OTAResponse OTA响应结构体
+type OTAResponse struct {
+	Websocket struct {
+		URL   string `json:"url"`
+		Token string `json:"token"`
+	} `json:"websocket"`
+}
+
+// DoOTARequest 执行OTA POST请求并打印响应数据
+func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interface{}) error {
+	// 构造请求体
+	bodyBytes, err := json.Marshal(postBody)
+	if err != nil {
+		return fmt.Errorf("JSON序列化失败: %v", err)
+	}
+
+	// 创建HTTP请求
+	req, err := http.NewRequest("POST", otaURL, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %v", err)
+	}
+
+	// 设置请求头
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
+	if deviceID != "" {
+		req.Header.Set("Device-Id", deviceID)
+	}
+
+	// 打印请求信息
+	fmt.Printf("==== OTA POST 请求 ====\n")
+	fmt.Printf("URL: %s\n", otaURL)
+	fmt.Printf("Device-Id: %s\n", deviceID)
+	fmt.Printf("请求体:\n%s\n", string(bodyBytes))
+
+	// 发送请求
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应失败: %v", err)
+	}
+
+	// 打印响应信息
+	fmt.Printf("\n==== OTA POST 响应 ====\n")
+	fmt.Printf("状态码: %d %s\n", resp.StatusCode, resp.Status)
+	fmt.Printf("响应头:\n")
+	for key, values := range resp.Header {
+		for _, value := range values {
+			fmt.Printf("  %s: %s\n", key, value)
+		}
+	}
+	fmt.Printf("响应体:\n%s\n", string(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP请求失败: %d %s", resp.StatusCode, resp.Status)
+	}
+
+	// 解析响应JSON
+	var otaResp OTAResponse
+	if err := json.Unmarshal(respBody, &otaResp); err != nil {
+		fmt.Printf("警告: JSON解析失败: %v\n", err)
+		fmt.Printf("原始响应: %s\n", string(respBody))
+		return err
+	}
+
+	// 提取并输出关键信息
+	fmt.Printf("\n==== 提取的关键信息 ====\n")
+	fmt.Printf("WebSocket URL: %s\n", otaResp.Websocket.URL)
+	fmt.Printf("Token: %s\n", otaResp.Websocket.Token)
+
+	// 发送事件给前端
+	runtime.EventsEmit(a.ctx, "ota_response", map[string]string{
+		"websocket_url": otaResp.Websocket.URL,
+		"token":         otaResp.Websocket.Token,
+		"raw_response":  string(respBody),
+	})
+
 	return nil
 }
