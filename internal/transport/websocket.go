@@ -21,6 +21,7 @@ func NewWebsocketTransport(url string, handlers Handlers) *WebsocketTransport {
 
 func (w *WebsocketTransport) Open(ctx context.Context, headers map[string]string) error {
 	var dialer websocket.Dialer
+	dialer.HandshakeTimeout = 15 * time.Second
 	reqHeader := http.Header{}
 	for k, v := range headers { reqHeader.Set(k, v) }
 	conn, _, err := dialer.DialContext(ctx, w.URL, reqHeader)

@@ -57,3 +57,46 @@
     border: none;
     background-color: rgba(255, 255, 255, 1);
 }
+
+/* Telegram-like chat layout */
+html, body, #root, #App { height: 100%; }
+#App { display: flex; align-items: center; justify-content: center; background: #0e1621; }
+.chat { width: min(860px, 100%); height: min(720px, 100%); background: #17212b; display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+.chat-header { padding: 14px 18px; background: #0f1a24; color: #fff; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(255,255,255,.06) }
+.chat-header .title { font-weight: 700; }
+.chat-header .subtitle { opacity: .6; font-size: 12px; }
+.chat-header .spacer { flex: 1 }
+.icon-btn { background: transparent; border: none; color: #dce7f1; font-size: 16px; cursor: pointer; }
+.icon-btn:hover { opacity: .8 }
+
+/* Settings panel */
+.settings { padding: 12px; background: #0f1a24; border-bottom: 1px solid rgba(255,255,255,.06); display: grid; gap: 8px; }
+.settings .row { display: flex; gap: 8px; align-items: center; }
+.settings label { color: #9fb3c8; font-size: 12px; }
+.settings input, .settings select { flex: 1; min-width: 120px; background: #0d141c; color: #e9eef3; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 8px; }
+.settings .primary { background: #2b8a3e; color: #fff; border: none; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+.settings .danger { background: #b23; color: #fff; border: none; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+
+/* Message list */
+.msg-list { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.msg-row { display: flex; gap: 8px; align-items: flex-end; }
+.msg-row.left { justify-content: flex-start; }
+.msg-row.right { justify-content: flex-end; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; background: #243447; display: grid; place-items: center; font-size: 14px; color: #fff; }
+.avatar.user { background: #2b5278; }
+
+.bubble { max-width: 70%; padding: 10px 12px; border-radius: 12px; color: #e9eef3; position: relative; word-break: break-word; }
+.bubble.user { background: #2b5278; border-top-right-radius: 4px; }
+.bubble.bot { background: #182533; border-top-left-radius: 4px; }
+.bubble .meta { opacity: .55; font-size: 11px; margin-top: 6px; text-align: right; }
+
+.input-bar { display: flex; gap: 10px; padding: 10px; background: #0f1a24; border-top: 1px solid rgba(255,255,255,.06) }
+.text-input { flex: 1; resize: none; background: #0d141c; color: #e9eef3; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 10px 12px; outline: none; min-height: 42px; }
+.send { background: #2b8a3e; color: #fff; border: none; border-radius: 10px; padding: 0 16px; font-weight: 700; cursor: pointer; }
+.send:hover { filter: brightness(1.05); }
+.mic { width: 42px; height: 42px; border-radius: 50%; border: none; background: #25597a; color: #fff; font-weight: 800; cursor: pointer; }
+.mic.recording { background: #a22; animation: pulse 1.2s infinite; }
+
+.ptt-timer { color: #ffb; align-self: center; min-width: 50px; text-align: center; }
+
+@keyframes pulse { 0%{ box-shadow: 0 0 0 0 rgba(255,0,0,.6) } 70%{ box-shadow: 0 0 0 12px rgba(255,0,0,0) } 100%{ box-shadow: 0 0 0 0 rgba(255,0,0,0) } }

@@ -2,3 +2,6 @@ build/bin
 node_modules
 frontend/dist
 /frontend/wailsjs
+xiaozhi.db-wal
+xiaozhi.db-shm
+xiaozhi.db
