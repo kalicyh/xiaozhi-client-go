@@ -3,14 +3,29 @@
 	"tasks": [
 		{
 			"type": "shell",
-			"label": "Build Go client",
+			"label": "Wails Dev",
 			"command": "pwsh",
 			"args": [
 				"-NoProfile",
 				"-NonInteractive",
 				"-Command",
-				"go mod tidy; go build -o .\\bin\\xiaozhi-client.exe .\\cmd\\xiaozhi-client"
-			]
+				"wails dev"
+			],
+			"group": "build",
+			"isBackground": true
+		},
+		{
+			"type": "shell",
+			"label": "Wails Build",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				"wails build"
+			],
+			"group": "build",
+			"isBackground": false
 		}
 	]
 }

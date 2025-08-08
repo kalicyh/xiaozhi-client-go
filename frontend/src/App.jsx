@@ -84,7 +84,41 @@ function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connectin
       </div>
       {form.protocol === 'ws' ? (
         <>
-          <div className="row"><label>WS URL</label><input value={form.ws} onChange={e=>set('ws', e.target.value)} placeholder="wss://host/ws" /></div>
+          <div className="row">
+            <label>使用OTA</label>
+            <input type="checkbox" checked={!!form.use_ota} onChange={(e)=>set('use_ota', e.target.checked)} />
+          </div>
+          <div className="row">
+            <label>启用Token</label>
+            <input type="checkbox" checked={!!form.enable_token} onChange={(e)=>set('enable_token', e.target.checked)} />
+          </div>
+          {/* 使用 OTA 时显示 OTA 参数 */}
+          {toBool(form.use_ota) && (
+            <>
+              <div className="row">
+                <label>OTA URL</label>
+                <input value={form.ota_url} onChange={e=>set('ota_url', e.target.value)} placeholder="https://api.tenclass.net/xiaozhi/ota/" style={{flex:1}} />
+              </div>
+              <div className="row">
+                <label>Device-Id</label>
+                <input value={form.ota_device_id} onChange={e=>set('ota_device_id', e.target.value)} placeholder="58:8c:81:66:01:CC" style={{flex:1}} />
+              </div>
+              <div className="row" style={{alignItems:'stretch'}}>
+                <label style={{alignSelf:'flex-start', marginTop:4}}>OTA POST内容</label>
+                <textarea
+                  value={form.ota_body}
+                  onChange={e=>set('ota_body', e.target.value)}
+                  rows={12}
+                  style={{flex:1, fontFamily:'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'}}
+                  placeholder="粘贴/编辑将作为 POST Body 发送的 JSON"
+                />
+              </div>
+            </>
+          )}
+          {/* 不使用 OTA 时显示手动 WS URL */}
+          {!toBool(form.use_ota) && (
+            <div className="row"><label>WS URL</label><input value={form.ws} onChange={e=>set('ws', e.target.value)} placeholder="wss://host/ws" /></div>
+          )}
         </>
       ) : (
         <>
@@ -101,7 +135,7 @@ function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connectin
         <label>ClientID</label><input value={form.client_id} onChange={e=>set('client_id', e.target.value)} />
         <label style={{marginLeft:8}}>DeviceID</label><input value={form.device_id} onChange={e=>set('device_id', e.target.value)} />
       </div>
-      <div className="row"><label>Token</label><input value={form.token} onChange={e=>set('token', e.target.value)} /></div>
+      <div className="row"><label>Token</label><input value={form.token} onChange={e=>set('token', e.target.value)} disabled={!toBool(form.enable_token)} /></div>
     </div>
   )
 }
@@ -111,7 +145,46 @@ function App() {
   const [recording, setRecording] = useState(false)
   const [showSettings, setShowSettings] = useState(true)
   const [form, setForm] = useState(() => ({
-    protocol: 'ws', ws: 'ws://127.0.0.1:8000', broker: '', pub: 'devices/+/tx', sub: 'devices/+/rx', username: '', password: '', client_id: '', device_id: '', token: ''
+    protocol: 'ws',
+    ws: 'ws://127.0.0.1:8000',
+    use_ota: true,
+    enable_token: true,
+    ota_url: 'https://api.tenclass.net/xiaozhi/ota/',
+    ota_device_id: '58:8c:81:66:01:CC',
+    ota_body: JSON.stringify({
+      version: 2,
+      flash_size: 16777216,
+      minimum_free_heap_size: 66204,
+      mac_address: 'dc:da:0c:8f:d6:fc',
+      uuid: '22655a88-1649-4526-9fb7-9698ccf14e04',
+      chip_model_name: 'esp32c3',
+      chip_info: { model: 5, cores: 1, revision: 4, features: 18 },
+      application: {
+        name: 'xiaozhi',
+        version: '1.1.9',
+        compile_time: 'Feb 17 2025T20:41:30Z',
+        idf_version: 'v5.4-dev-4076-gce6085349f',
+        elf_sha256: '27878af4f1e8f87dcca22b97a13a4da9ae9fcc43596fa3e6905b90957a1a42b9'
+      },
+      partition_table: [
+        { label: 'nvs', type: 1, subtype: 2, address: 36864, size: 16384 },
+        { label: 'otadata', type: 1, subtype: 0, address: 53248, size: 8192 },
+        { label: 'phy_init', type: 1, subtype: 1, address: 61440, size: 4096 },
+        { label: 'model', type: 1, subtype: 130, address: 65536, size: 983040 },
+        { label: 'ota_0', type: 0, subtype: 16, address: 1048576, size: 6291456 },
+        { label: 'ota_1', type: 0, subtype: 17, address: 7340032, size: 6291456 }
+      ],
+      ota: { label: 'ota_0' },
+      board: {
+        type: 'xmini-c3',
+        ssid: 'Redmi_Kalicyh_2.5G',
+        rssi: -54,
+        channel: 9,
+        ip: '192.168.31.234',
+        mac: 'dc:da:0c:8f:d6:fc'
+      }
+    }, null, 2),
+    broker: '', pub: 'devices/+/tx', sub: 'devices/+/rx', username: '', password: '', client_id: '', device_id: '', token: ''
   }))
   const [pttTime, setPttTime] = useState(0)
   const [connecting, setConnecting] = useState(false)
@@ -136,8 +209,7 @@ function App() {
       const proto = (info && info.protocol) || form.protocol
       setSubtitle(`在线 · ${proto === 'ws' ? 'WebSocket' : 'MQTT'}`)
       appendMsg('bot', `已连接（${proto}）`)
-      // 保存配置
-      EEmit('save_config', form)
+      // ...不在此处保存配置，改为在发起连接时保存（包含解析后的地址）
     })
     const offDisconnected = EOn('disconnected', () => {
       setSubtitle('离线')
@@ -152,7 +224,12 @@ function App() {
       // 从持久化恢复
       try {
         const obj = typeof m === 'string' ? JSON.parse(m) : m
-        setForm(f => ({ ...f, ...obj }))
+        setForm(f => ({
+          ...f,
+          ...obj,
+          use_ota: toBool(obj?.use_ota ?? f.use_ota),
+          enable_token: toBool(obj?.enable_token ?? f.enable_token),
+        }))
       } catch {
         // ignore
       }
@@ -200,12 +277,46 @@ function App() {
     EEmit('stop_listen')
   }
 
-  const handleConnect = (f) => {
+  const handleConnect = async (f) => {
     setConnecting(true)
     if (f.protocol === 'ws') {
-      EEmit('connect_ws', { url: f.ws, client_id: f.client_id, device_id: f.device_id, token: f.token })
+      let resolved = { ...f }
+      if (toBool(f.use_ota)) {
+        try {
+          let bodyObj = {}
+          if (f.ota_body && String(f.ota_body).trim()) {
+            try { bodyObj = JSON.parse(f.ota_body) } catch (e) {
+              throw new Error('OTA POST内容不是有效的 JSON')
+            }
+          }
+          const headers = { 'Content-Type': 'application/json', 'Accept': '*/*' }
+          if (f.ota_device_id) headers['Device-Id'] = f.ota_device_id
+          const res = await fetch(f.ota_url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(bodyObj),
+            cache: 'no-store'
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const data = await res.json()
+          const wsUrl = data?.websocket?.url
+          if (!wsUrl) throw new Error('OTA 响应缺少 websocket.url')
+          resolved.ws = wsUrl
+          // 若 OTA 同时提供 token，则一并使用
+          const wsToken = data?.websocket?.token
+          if (wsToken) resolved.token = wsToken
+        } catch (e) {
+          setConnecting(false)
+          setShowSettings(true)
+          appendMsg('bot', `OTA 获取失败：${escapeHtml(String(e))}`)
+          return
+        }
+      }
+      EventsEmit('connect_ws', { url: resolved.ws, client_id: resolved.client_id, device_id: resolved.device_id, token: resolved.token, enable_token: toBool(resolved.enable_token) })
+      EventsEmit('save_config', resolved)
     } else {
-      EEmit('connect_mqtt', { broker: f.broker, username: f.username, password: f.password, pub: f.pub, sub: f.sub, client_id: f.client_id, device_id: f.device_id, token: f.token })
+      EventsEmit('connect_mqtt', { broker: f.broker, username: f.username, password: f.password, pub: f.pub, sub: f.sub, client_id: f.client_id, device_id: f.device_id, token: f.token })
+      EventsEmit('save_config', f)
     }
     setShowSettings(false)
   }
@@ -238,4 +349,10 @@ function escapeHtml(str){
     .replaceAll('>','&gt;')
     .replaceAll('"','&quot;')
     .replaceAll("'",'&#39;')
+}
+
+function toBool(v){
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'string') return v === 'true' || v === '1' || v.toLowerCase() === 'yes'
+  return !!v
 }

@@ -114,18 +114,41 @@ func (a *App) startup(ctx context.Context) {
 				kv = m
 			} else if m2, ok2 := args[0].(map[string]string); ok2 {
 				kv = make(map[string]any, len(m2))
-				for k, v := range m2 {
-					kv[k] = v
-				}
+				for k, v := range m2 { kv[k] = v }
 			} else {
 				runtime.EventsEmit(a.ctx, "error", "invalid connect_ws payload")
 				return
 			}
 			cfg := client.DefaultConfig()
-			cfg.WebsocketURL = getStr(kv, "url")
+			// 兼容 OTA 响应：优先从 websocket.url 读取；若没有，再读取扁平的 url
+			wsURL := getStr(kv, "url")
+			if wsURL == "" {
+				if wsv, ok := kv["websocket"]; ok {
+					switch t := wsv.(type) {
+					case map[string]any:
+						if u := getStr(t, "url"); u != "" { wsURL = u }
+						if tok := getStr(t, "token"); tok != "" { cfg.AuthToken = tok }
+					case string:
+						if t != "" { wsURL = t }
+					}
+				}
+			}
+			cfg.WebsocketURL = wsURL
 			cfg.ClientID = getStr(kv, "client_id")
 			cfg.DeviceID = getStr(kv, "device_id")
-			cfg.AuthToken = getStr(kv, "token")
+			// Token 与开关
+			if tok := getStr(kv, "token"); tok != "" { cfg.AuthToken = tok }
+			if en, ok := kv["enable_token"]; ok {
+				switch t := en.(type) {
+				case bool:
+					cfg.EnableToken = t
+				case string:
+					cfg.EnableToken = (t == "true" || t == "1" || t == "yes")
+				}
+			} else {
+				// 默认开启（与参考项目一致）
+				cfg.EnableToken = true
+			}
 			c := client.New(cfg)
 			c.OnJSON = func(ctx context.Context, msg map[string]any) {
 				b, _ := json.Marshal(msg)
@@ -161,7 +184,20 @@ func (a *App) startup(ctx context.Context) {
 			protocol := getStr(kv, "protocol")
 			if a.client == nil {
 				cfg := client.DefaultConfig()
-				cfg.WebsocketURL = getStr(kv, "url")
+				// 兼容 OTA：初始化时同样尝试从 websocket.url 获取
+				wsURL := getStr(kv, "url")
+				if wsURL == "" {
+					if wsv, ok := kv["websocket"]; ok {
+						switch t := wsv.(type) {
+						case map[string]any:
+							if u := getStr(t, "url"); u != "" { wsURL = u }
+							if tok := getStr(t, "token"); tok != "" { cfg.AuthToken = tok }
+						case string:
+							if t != "" { wsURL = t }
+						}
+					}
+				}
+				cfg.WebsocketURL = wsURL
 				cfg.MQTTBroker = getStr(kv, "broker")
 				cfg.MQTTUsername = getStr(kv, "username")
 				cfg.MQTTPassword = getStr(kv, "password")
@@ -169,7 +205,7 @@ func (a *App) startup(ctx context.Context) {
 				cfg.MQTTSubscribeTopic = getStr(kv, "sub")
 				cfg.ClientID = getStr(kv, "client_id")
 				cfg.DeviceID = getStr(kv, "device_id")
-				cfg.AuthToken = getStr(kv, "token")
+				if tok := getStr(kv, "token"); tok != "" { cfg.AuthToken = tok }
 				a.client = client.New(cfg)
 				a.client.OnJSON = func(ctx context.Context, msg map[string]any) {
 					b, _ := json.Marshal(msg)

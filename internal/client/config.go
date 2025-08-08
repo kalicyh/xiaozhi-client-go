@@ -12,7 +12,7 @@ type AudioParams struct {
 type HelloMessage struct {
 	Type        string                 `json:"type"`
 	Version     int                    `json:"version"`
-	Transport   string                 `json:"transport"`
+	Transport   string                 `json:"transport,omitempty"`
 	Features    map[string]any         `json:"features,omitempty"`
 	AudioParams AudioParams            `json:"audio_params"`
 }
@@ -36,11 +36,13 @@ type Config struct {
 	ClientID        string
 	DeviceID        string
 	AuthToken       string
+	EnableToken     bool
 	ProtocolVersion int
 	Audio           AudioParams
 	HelloTimeout    time.Duration
 
-	WebsocketURL string
+	WebsocketURL         string
+	WebsocketSubprotocol string
 
 	MQTTBroker         string
 	MQTTUsername       string

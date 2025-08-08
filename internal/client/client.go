@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"myproject/internal/transport"
@@ -23,6 +27,9 @@ type Client struct {
 	OnBinary  func(ctx context.Context, data []byte)
 	OnError   func(ctx context.Context, err error)
 	OnClosed  func()
+
+	mu      sync.Mutex
+	helloCh chan struct{}
 }
 
 func New(cfg Config) *Client { return &Client{cfg: cfg} }
@@ -47,22 +54,55 @@ func (c *Client) SwitchProtocol(ctx context.Context, protocol string) error {
 
 func (c *Client) OpenWebsocket(ctx context.Context) error {
 	if c.cfg.WebsocketURL == "" { return errors.New("websocket url required") }
-	headers := map[string]string{
-		"Authorization":    fmt.Sprintf("Bearer %s", c.cfg.AuthToken),
-		"Protocol-Version": fmt.Sprintf("%d", c.cfg.ProtocolVersion),
-		"Device-Id":        c.cfg.DeviceID,
-		"Client-Id":        c.cfg.ClientID,
+	wsURL := c.cfg.WebsocketURL
+	// 1) 补 /ws
+	if u, err := url.Parse(wsURL); err == nil && u != nil {
+		if strings.HasSuffix(u.Path, "/v1") || strings.HasSuffix(u.Path, "/v1/") {
+			if strings.HasSuffix(u.Path, "/") { u.Path = u.Path + "ws" } else { u.Path = u.Path + "/ws" }
+			wsURL = u.String()
+		}
 	}
-	c.ws = transport.NewWebsocketTransport(c.cfg.WebsocketURL, transport.Handlers{
+	// 2) token 放入 access_token（优先 query，避免 Authorization）
+	if c.cfg.EnableToken && c.cfg.AuthToken != "" {
+		if u, err := url.Parse(wsURL); err == nil && u != nil {
+			q := u.Query(); if q.Get("token") == "" && q.Get("access_token") == "" { q.Set("access_token", c.cfg.AuthToken) }
+			u.RawQuery = q.Encode()
+			wsURL = u.String()
+		}
+	}
+	// 3) 仅设置 Origin 头
+	headers := map[string]string{}
+	if o := originFromWSURL(wsURL); o != "" { headers["Origin"] = o }
+
+	w := transport.NewWebsocketTransport(wsURL, transport.Handlers{
 		OnText:   func(ctx context.Context, text []byte) { c.onWSMessage(ctx, text) },
 		OnBinary: func(ctx context.Context, data []byte) { if c.OnBinary != nil { c.OnBinary(ctx, data) } },
 		OnError:  func(ctx context.Context, err error) { if c.OnError != nil { c.OnError(ctx, err) } },
 		OnClosed: func() { if c.OnClosed != nil { c.OnClosed() } },
 	})
+	c.ws = w
 	if err := c.ws.Open(ctx, headers); err != nil { if c.OnError != nil { c.OnError(ctx, err) }; return err }
-	hello := HelloMessage{Type: "hello", Version: c.cfg.ProtocolVersion, Transport: "websocket", AudioParams: c.cfg.Audio, Features: map[string]any{"mcp": true}}
+	// 发送 hello（webui 不带 transport 字段）
+	hello := HelloMessage{Type: "hello", Version: c.cfg.ProtocolVersion, AudioParams: c.cfg.Audio, Features: map[string]any{"mcp": true}}
 	b, _ := json.Marshal(hello)
-	return c.ws.SendText(ctx, b)
+	if err := c.ws.SendText(ctx, b); err != nil { return err }
+	// 等待服务端 hello
+	c.mu.Lock()
+	c.helloCh = make(chan struct{})
+	ch := c.helloCh
+	c.mu.Unlock()
+	select {
+	case <-ch:
+		return nil
+	case <-time.After(c.cfg.HelloTimeout):
+		err := errors.New("hello timeout")
+		_ = c.ws.Close()
+		if c.OnError != nil { c.OnError(ctx, err) }
+		return err
+	case <-ctx.Done():
+		_ = c.ws.Close()
+		return ctx.Err()
+	}
 }
 
 func (c *Client) onWSMessage(ctx context.Context, text []byte) {
@@ -70,6 +110,11 @@ func (c *Client) onWSMessage(ctx context.Context, text []byte) {
 	if err := json.Unmarshal(text, &msg); err != nil { return }
 	if t, ok := msg["type"].(string); ok && t == "hello" {
 		if sid, ok := msg["session_id"].(string); ok { c.SessionID = sid }
+		c.mu.Lock()
+		ch := c.helloCh
+		c.helloCh = nil
+		c.mu.Unlock()
+		if ch != nil { close(ch) }
 	}
 	if c.OnJSON != nil { c.OnJSON(ctx, msg) }
 }
@@ -153,4 +198,11 @@ func (c *Client) SendOpusUpstream(_ context.Context, opus []byte) error {
 	if c.udp != nil { return c.udp.SendOpusFrame(opus) }
 	if c.ws != nil { return c.ws.SendBinary(context.Background(), opus) }
 	return errors.New("no audio channel")
+}
+
+func originFromWSURL(raw string) string {
+	u, err := url.Parse(raw); if err != nil { return "" }
+	scheme := "http"; if u.Scheme == "wss" { scheme = "https" }
+	if u.Host == "" { return "" }
+	return scheme + "://" + u.Host
 }
