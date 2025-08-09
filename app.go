@@ -15,15 +15,23 @@ import (
 	"myproject/internal/client"
 	"myproject/internal/store"
 	"myproject/internal/logging"
+	// 新增: Opus 编码依赖
+	"github.com/hraban/opus"
+	"sync"
 )
 
 // App struct
 type App struct {
-	client          *client.Client
-	store           *store.DB
-	ctx             context.Context
-	opusDecoder     *audio.OpusDecoder
+	client           *client.Client
+	store            *store.DB
+	ctx              context.Context
+	opusDecoder      *audio.OpusDecoder
 	volumeController *audio.VolumeController
+	// 新增: 录音上行编码器与缓冲
+	micEnc   *opus.Encoder
+	micBuf   []float32
+	micMu    sync.Mutex
+	micOn    bool
 }
 
 // NewApp creates a new App application struct
@@ -316,8 +324,61 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 	// start/stop listen
-	runtime.EventsOn(ctx, "start_listen", func(args ...interface{}) { if a.client != nil { _ = a.client.SendListenStart(context.Background(), "manual") } })
-	runtime.EventsOn(ctx, "stop_listen", func(args ...interface{}) { if a.client != nil { _ = a.client.SendListenStop(context.Background(), "manual") } })
+	runtime.EventsOn(ctx, "start_listen", func(args ...interface{}) {
+		if a.client != nil { _ = a.client.SendListenStart(context.Background(), "manual") }
+		// 开启本地麦克风编码
+		a.micMu.Lock()
+		a.micOn = true
+		if a.micEnc == nil {
+			enc, err := opus.NewEncoder(16000, 1, opus.AppVoIP)
+			if err != nil {
+				logging.L().With("module", "audio").Warn("创建 Opus 编码器失败", "err", err)
+			} else {
+				// 可选: 设置比特率与复杂度
+				_ = enc.SetBitrate(24000)
+				_ = enc.SetComplexity(5)
+				a.micEnc = enc
+			}
+		}
+		// 清空缓冲
+		a.micBuf = nil
+		a.micMu.Unlock()
+	})
+	runtime.EventsOn(ctx, "stop_listen", func(args ...interface{}) {
+		if a.client != nil { _ = a.client.SendListenStop(context.Background(), "manual") }
+		// 关闭本地麦克风编码（保留编码器以便复用，清空状态）
+		a.micMu.Lock()
+		a.micOn = false
+		a.micBuf = nil
+		a.micMu.Unlock()
+	})
+	// 录音帧（前端 16kHz/单声道/Float32），按 60ms = 960 样本编码
+	runtime.EventsOn(ctx, "mic_frame", func(args ...interface{}) {
+		if len(args) != 1 { return }
+		var samples []float32
+		switch v := args[0].(type) {
+		case []float32:
+			samples = v
+		case []any:
+			for _, x := range v {
+				switch t := x.(type) {
+				case float32:
+					samples = append(samples, t)
+				case float64:
+					samples = append(samples, float32(t))
+				case int:
+					samples = append(samples, float32(t))
+				}
+			}
+		case []float64:
+			for _, f := range v { samples = append(samples, float32(f)) }
+		default:
+			return
+		}
+		if len(samples) == 0 { return }
+		a.encodeAndSendMic(samples)
+	})
+
 	runtime.EventsOn(ctx, "abort", func(args ...interface{}) { if a.client != nil { _ = a.client.SendAbort(context.Background(), "user") } })
 	// disconnect
 	runtime.EventsOn(ctx, "disconnect", func(args ...interface{}) { if a.client != nil { a.client.Close(); runtime.EventsEmit(a.ctx, "disconnected") } })
@@ -396,6 +457,40 @@ func (a *App) startup(ctx context.Context) {
 		_ = a.store.ClearConfig(context.Background())
 		runtime.EventsEmit(ctx, "config", map[string]string{})
 	})
+}
+
+// 将前端录音帧编码为 Opus 并上行
+func (a *App) encodeAndSendMic(samples []float32) {
+	a.micMu.Lock()
+	enc := a.micEnc
+	active := a.micOn
+	// 追加样本
+	if len(samples) > 0 {
+		a.micBuf = append(a.micBuf, samples...)
+	}
+	// 每帧 60ms@16kHz = 960 样本
+	const frameSize = 960
+	var frames [][]float32
+	for active && len(a.micBuf) >= frameSize {
+		frame := make([]float32, frameSize)
+		copy(frame, a.micBuf[:frameSize])
+		a.micBuf = a.micBuf[frameSize:]
+		frames = append(frames, frame)
+	}
+	a.micMu.Unlock()
+
+	if !active || enc == nil || a.client == nil { return }
+	for _, f := range frames {
+		// 编码
+		out := make([]byte, 4000)
+		n, err := enc.EncodeFloat32(f, out)
+		if err != nil {
+			logging.L().With("module", "audio").Warn("Opus 编码失败", "err", err)
+			continue
+		}
+		if n <= 0 { continue }
+		_ = a.client.SendOpusUpstream(context.Background(), out[:n])
+	}
 }
 
 // Greet returns a greeting for the given name

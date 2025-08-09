@@ -6,6 +6,8 @@ import AudioPlayer from './audio/AudioPlayer.js'
 import SettingsPage from './components/SettingsPage.jsx'
 import CustomTitleBar from './components/CustomTitleBar.jsx'
 import './components/SettingsPage.css'
+// 新增：麦克风录音器
+import MicRecorder from './audio/MicRecorder.js'
 
 // 安全包装：在浏览器直开或未通过 Wails 运行时，window.runtime 可能不存在
 const RT = typeof window !== 'undefined' && window.runtime
@@ -111,6 +113,8 @@ function App() {
   const [recording, setRecording] = useState(false)
   const [currentPage, setCurrentPage] = useState('chat') // 'chat' | 'settings' | 'db'
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight })
+  // 新增：麦克风录音器引用
+  const micRef = useRef(null)
   const [form, setForm] = useState(() => ({
     protocol: 'ws',
     ws: 'ws://127.0.0.1:8000',
@@ -162,6 +166,11 @@ function App() {
   const pendingAvatarRef = useRef(null)
   const lastUserMsgRef = useRef("")
   const interceptQuotaRef = useRef(0)
+  // 新增：拦截窗口（仅在用户发送后的前两条服务器消息内生效）
+  const interceptWindowRef = useRef(0)
+  // 新增：PTT 首条消息作为用户气泡的标记
+  const pttExpectUserFirstRef = useRef(false)
+  const pttFirstTimeoutRef = useRef(null)
   // 新增：自动连接标志（用于抑制“已连接”重复提示）
   const autoConnectingRef = useRef(false)
   // 新增：系统气泡显隐的 ref，避免事件回调闭包拿到旧状态
@@ -381,7 +390,7 @@ function App() {
           // 其它 TTS 状态保持原有概括
           const sr = obj.sample_rate || obj.sampleRate
           const stTxt = state === 'start' ? '开始' : (state === 'stop' ? '结束' : String(state))
-          summarized = `TTS ${escapeHtml(stTxt)} · 采样率 ${escapeHtml(String(sr || '?'))}Hz`
+          summarized = `TTS ${escapeHtml(stTxt)}`
           return appendMsg('system', summarized, JSON.stringify(obj, null, 2))
         }
       } catch (_) {
@@ -399,18 +408,37 @@ function App() {
 
       // 新：每次用户发送后仅拦截两条；第二条若为纯表情则作为下次回复头像
       const plain = String(display || '').trim()
-      if (interceptQuotaRef.current > 0) {
-        // 第一条优先拦截：与最近用户消息完全一致视为回显
-        if (interceptQuotaRef.current === 2 && plain === lastUserMsgRef.current) {
-          interceptQuotaRef.current -= 1
-          return
-        }
-        // 第二条：若是纯表情则缓存为下一次回复头像
-        if (interceptQuotaRef.current === 1 && isEmojiOnly(plain)) {
+      const windowActive = interceptWindowRef.current > 0
+
+      // 若为按住说话模式下的第一条普通文本，则作为“用户”消息展示，并设置拦截状态
+      if (pttExpectUserFirstRef.current && plain) {
+        pttExpectUserFirstRef.current = false
+        if (pttFirstTimeoutRef.current) { clearTimeout(pttFirstTimeoutRef.current); pttFirstTimeoutRef.current = null }
+        appendMsg('user', escapeHtml(display))
+        // 同步后续拦截逻辑，仿照键入发送
+        lastUserMsgRef.current = plain
+        interceptQuotaRef.current = 2
+        interceptWindowRef.current = 2
+        pendingAvatarRef.current = null
+        return
+      }
+
+      if (windowActive && interceptQuotaRef.current > 0) {
+        // 优先：若是纯表情，则作为下一条回复头像捕获
+        if (isEmojiOnly(plain)) {
           pendingAvatarRef.current = plain
           interceptQuotaRef.current -= 1
+          interceptWindowRef.current -= 1
           return
         }
+        // 回显拦截：与最近用户消息完全一致视为回显
+        if (plain === lastUserMsgRef.current) {
+          interceptQuotaRef.current -= 1
+          interceptWindowRef.current -= 1
+          return
+        }
+        // 未匹配到但窗口前进，避免无限期等待
+        interceptWindowRef.current -= 1
       }
 
       // 消费一次待用头像
@@ -646,6 +674,7 @@ function App() {
     // 记录最近用户文本并设置拦截配额；清空待用头像
     lastUserMsgRef.current = String(text).trim()
     interceptQuotaRef.current = 2
+    interceptWindowRef.current = 2
     pendingAvatarRef.current = null
 
     if (connected) {
@@ -664,18 +693,55 @@ function App() {
     }
   }
 
-  const startPTT = () => {
+  const startPTT = async () => {
     setRecording(true)
     setPttTime(0)
     clearInterval(timerRef.current)
     timerRef.current = setInterval(()=>setPttTime(t=>t+0.1), 100)
+
+    // 未连接则自动连接
+    if (!connected) {
+      if (!connecting) {
+        autoConnectingRef.current = true
+        const proto = form.protocol || 'ws'
+        appendMsg('system', `自动连接（${proto}）`)
+        handleConnect(form)
+      }
+    }
+
     EEmit('start_listen')
+    // 开始一次 PTT 会话：下一条普通文本优先作为“用户”气泡显示（带超时）
+    pttExpectUserFirstRef.current = true
+    if (pttFirstTimeoutRef.current) { clearTimeout(pttFirstTimeoutRef.current) }
+    pttFirstTimeoutRef.current = setTimeout(() => {
+      pttExpectUserFirstRef.current = false
+      pttFirstTimeoutRef.current = null
+    }, 10000)
+
+    // 启动麦克风采集并将帧发送给后端
+    try {
+      if (!micRef.current) {
+        micRef.current = new MicRecorder({
+          targetSampleRate: 16000,
+          onFrame: (arr) => {
+            // 将Float32数组转普通数组以便 Wails 传输
+            try { EEmit('mic_frame', arr) } catch (e) { console.warn('mic_frame emit failed', e) }
+          }
+        })
+      }
+      await micRef.current.start()
+    } catch (e) {
+      console.error('启动麦克风失败:', e)
+      appendMsg('system', `🎙️ 启动麦克风失败: ${escapeHtml(e?.message || String(e))}`)
+    }
   }
 
   const stopPTT = () => {
     setRecording(false)
     clearInterval(timerRef.current)
     EEmit('stop_listen')
+    // 停止麦克风
+    try { micRef.current && micRef.current.stop() } catch {}
   }
 
   const handleConnect = async (f) => {
