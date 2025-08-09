@@ -6,6 +6,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"myproject/internal/logging"
 )
 
 //go:embed all:frontend/dist
@@ -13,7 +14,7 @@ var assets embed.FS
 
 func main() {
 	app := NewApp()
-	
+
 	if err := wails.Run(&options.App{
 		Title:  "xiaozhi_client-go",
 		Width:  1024,
@@ -25,5 +26,7 @@ func main() {
 		Frameless: true,
 		CSSDragProperty: "-webkit-app-region",
 		CSSDragValue: "drag",
-	}); err != nil { println("Error:", err.Error()) }
+	}); err != nil {
+		logging.L().Error("app exit", "err", err)
+	}
 }

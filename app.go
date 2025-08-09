@@ -14,6 +14,7 @@ import (
 	"myproject/internal/audio"
 	"myproject/internal/client"
 	"myproject/internal/store"
+	"myproject/internal/logging"
 )
 
 // App struct
@@ -46,26 +47,30 @@ func getStr(m map[string]any, k string) string {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// 初始化全局日志
+	logging.Init("")
+	log := logging.L().With("module", "app")
+
 	a.store, _ = store.Open("xiaozhi.db")
 	_ = a.store.InitConfig()
-	
+
 	// 初始化 Opus 解码器（24kHz 单声道）
 	var err error
 	a.opusDecoder, err = audio.NewOpusDecoder(24000, 1)
 	if err != nil {
-		fmt.Printf("警告: Opus 解码器初始化失败: %v\n", err)
+		log.Warn("Opus 解码器初始化失败", "err", err)
 	} else {
-		fmt.Println("Opus 解码器初始化成功")
+		log.Info("Opus 解码器初始化成功")
 	}
-	
+
 	// 初始化音量控制器
 	a.volumeController = audio.NewVolumeController()
 	if a.volumeController.IsVolumeSupported() {
-		fmt.Println("系统音量控制初始化成功")
+		log.Info("系统音量控制初始化成功")
 	} else {
-		fmt.Println("警告: 系统音量控制不可用")
+		log.Warn("系统音量控制不可用")
 	}
-	
+
 	// events
 	runtime.EventsOn(ctx, "save_config", func(args ...interface{}) {
 		if len(args) == 1 {
@@ -119,7 +124,7 @@ func (a *App) startup(ctx context.Context) {
 				_ = a.store.SaveMessage(context.Background(), c.SessionID, "in", "json", string(b), time.Now().Unix())
 				runtime.EventsEmit(a.ctx, "text", string(b))
 			}
-			c.OnBinary = func(ctx context.Context, data []byte) { 
+			c.OnBinary = func(ctx context.Context, data []byte) {
 				// 在 Go 端解码 Opus 数据（MQTT 通道）
 				a.handleOpusAudio(data)
 			}
@@ -182,7 +187,7 @@ func (a *App) startup(ctx context.Context) {
 				_ = a.store.SaveMessage(context.Background(), c.SessionID, "in", "json", string(b), time.Now().Unix())
 				runtime.EventsEmit(a.ctx, "text", string(b))
 			}
-			c.OnBinary = func(ctx context.Context, data []byte) { 
+			c.OnBinary = func(ctx context.Context, data []byte) {
 				// 在 Go 端解码 Opus 数据（WebSocket 通道）
 				a.handleOpusAudio(data)
 			}
@@ -242,9 +247,9 @@ func (a *App) startup(ctx context.Context) {
 					_ = a.store.SaveMessage(context.Background(), a.client.SessionID, "in", "json", string(b), time.Now().Unix())
 					runtime.EventsEmit(a.ctx, "text", string(b))
 				}
-				a.client.OnBinary = func(ctx context.Context, data []byte) { 
+				a.client.OnBinary = func(ctx context.Context, data []byte) {
 					// 在 Go 端解码 Opus 数据（协议切换）
-					a.handleOpusAudio(data)
+				 a.handleOpusAudio(data)
 				}
 				a.client.OnError = func(ctx context.Context, err error) { runtime.EventsEmit(a.ctx, "error", err.Error()) }
 				a.client.OnClosed = func() { runtime.EventsEmit(a.ctx, "disconnected") }
@@ -280,10 +285,10 @@ func (a *App) startup(ctx context.Context) {
 				runtime.EventsEmit(a.ctx, "error", "invalid ota_request payload")
 				return
 			}
-			
+
 			otaURL := getStr(kv, "url")
 			deviceID := getStr(kv, "device_id")
-			
+
 			// 处理POST body
 			var postBody map[string]interface{}
 			if bodyData, ok := kv["body"]; ok {
@@ -300,13 +305,13 @@ func (a *App) startup(ctx context.Context) {
 					return
 				}
 			}
-			
+
 			if err := a.DoOTARequest(otaURL, deviceID, postBody); err != nil {
 				runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("OTA请求失败: %v", err))
 			}
 		}
 	})
-	
+
 	// 监听窗口状态变化
 	runtime.EventsOn(ctx, "window_state_change", func(args ...interface{}) {
 		if len(args) == 1 {
@@ -339,25 +344,25 @@ func (a *App) GetWindowState() string {
 	if a.ctx == nil {
 		return "normal"
 	}
-	
+
 	// 检查窗口是否为全屏状态
 	isFullscreen := runtime.WindowIsFullscreen(a.ctx)
 	if isFullscreen {
 		return "fullscreen"
 	}
-	
+
 	// 检查窗口是否最大化
 	isMaximized := runtime.WindowIsMaximised(a.ctx)
 	if isMaximized {
 		return "maximized"
 	}
-	
+
 	// 检查窗口是否最小化
 	isMinimized := runtime.WindowIsMinimised(a.ctx)
 	if isMinimized {
 		return "minimized"
 	}
-	
+
 	return "normal"
 }
 
@@ -366,14 +371,14 @@ func (a *App) ToggleFullscreen() {
 	if a.ctx == nil {
 		return
 	}
-	
+
 	isFullscreen := runtime.WindowIsFullscreen(a.ctx)
 	if isFullscreen {
 		runtime.WindowUnfullscreen(a.ctx)
 	} else {
 		runtime.WindowFullscreen(a.ctx)
 	}
-	
+
 	// 发送状态变化事件
 	go func() {
 		time.Sleep(100 * time.Millisecond) // 等待状态变化完成
@@ -392,6 +397,7 @@ type OTAResponse struct {
 
 // DoOTARequest 执行OTA POST请求并打印响应数据
 func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interface{}) error {
+	log := logging.L().With("module", "ota")
 	// 构造请求体
 	bodyBytes, err := json.Marshal(postBody)
 	if err != nil {
@@ -411,11 +417,9 @@ func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interfac
 		req.Header.Set("Device-Id", deviceID)
 	}
 
-	// 打印请求信息
-	fmt.Printf("==== OTA POST 请求 ====\n")
-	fmt.Printf("URL: %s\n", otaURL)
-	fmt.Printf("Device-Id: %s\n", deviceID)
-	fmt.Printf("请求体:\n%s\n", string(bodyBytes))
+	// 打印请求信息（分级日志）
+	log.Info("OTA 请求", "url", otaURL, "device_id", deviceID)
+	log.Debug("OTA 请求体", "body", string(bodyBytes))
 
 	// 发送请求
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -431,16 +435,9 @@ func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interfac
 		return fmt.Errorf("读取响应失败: %v", err)
 	}
 
-	// 打印响应信息
-	fmt.Printf("\n==== OTA POST 响应 ====\n")
-	fmt.Printf("状态码: %d %s\n", resp.StatusCode, resp.Status)
-	fmt.Printf("响应头:\n")
-	for key, values := range resp.Header {
-		for _, value := range values {
-			fmt.Printf("  %s: %s\n", key, value)
-		}
-	}
-	fmt.Printf("响应体:\n%s\n", string(respBody))
+	// 打印响应信息（分级日志）
+	log.Info("OTA 响应", "status", resp.StatusCode)
+	log.Debug("OTA 响应体", "body", string(respBody))
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP请求失败: %d %s", resp.StatusCode, resp.Status)
@@ -449,15 +446,13 @@ func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interfac
 	// 解析响应JSON
 	var otaResp OTAResponse
 	if err := json.Unmarshal(respBody, &otaResp); err != nil {
-		fmt.Printf("警告: JSON解析失败: %v\n", err)
-		fmt.Printf("原始响应: %s\n", string(respBody))
+		log.Warn("JSON解析失败", "err", err)
+		log.Debug("原始响应", "body", string(respBody))
 		return err
 	}
 
 	// 提取并输出关键信息
-	fmt.Printf("\n==== 提取的关键信息 ====\n")
-	fmt.Printf("WebSocket URL: %s\n", otaResp.Websocket.URL)
-	fmt.Printf("Token: %s\n", otaResp.Websocket.Token)
+	log.Info("OTA 关键信息", "ws_url", otaResp.Websocket.URL)
 
 	// 发送事件给前端
 	runtime.EventsEmit(a.ctx, "ota_response", map[string]string{
@@ -471,24 +466,24 @@ func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interfac
 
 // handleOpusAudio 处理 Opus 音频数据，在 Go 端解码后发送 PCM 给前端
 func (a *App) handleOpusAudio(opusData []byte) {
+	log := logging.L().With("module", "audio")
 	if a.opusDecoder == nil {
-		fmt.Printf("Opus 解码器未初始化，数据长度: %d bytes，直接发送原始数据\n", len(opusData))
+		log.Warn("Opus 解码器未初始化，回退发送原始数据", "len", len(opusData))
 		runtime.EventsEmit(a.ctx, "audio", opusData)
 		return
 	}
 
-	fmt.Printf("收到 Opus 数据: %d bytes\n", len(opusData))
+	log.Debug("收到 Opus 数据", "len", len(opusData))
 
 	// 使用 Go 端的 Opus 解码器解码
 	pcmData, err := a.opusDecoder.DecodeFrameToFloat32(opusData)
 	if err != nil {
-		fmt.Printf("Go Opus 解码失败 (数据长度: %d): %v，发送原始数据\n", len(opusData), err)
+		log.Warn("Go Opus 解码失败，回退发送原始数据", "len", len(opusData), "err", err)
 		runtime.EventsEmit(a.ctx, "audio", opusData)
 		return
 	}
 
-	fmt.Printf("Go Opus 解码成功: %d bytes -> %d samples (模拟 opus.dll)\n", 
-		len(opusData), len(pcmData))
+	log.Debug("Go Opus 解码成功", "opus_bytes", len(opusData), "samples", len(pcmData))
 
 	// 发送解码后的 PCM 数据给前端
 	runtime.EventsEmit(a.ctx, "audio_pcm", pcmData)
@@ -499,13 +494,13 @@ func (a *App) GetSystemVolume() float64 {
 	if a.volumeController == nil {
 		return 1.0 // 默认音量
 	}
-	
+
 	volume, err := a.volumeController.GetSystemVolume()
 	if err != nil {
-		fmt.Printf("获取系统音量失败: %v\n", err)
+		logging.L().With("module", "audio").Warn("获取系统音量失败", "err", err)
 		return 1.0
 	}
-	
+
 	return volume
 }
 
@@ -514,14 +509,14 @@ func (a *App) SetSystemVolume(volume float64) error {
 	if a.volumeController == nil {
 		return fmt.Errorf("音量控制器未初始化")
 	}
-	
+
 	err := a.volumeController.SetSystemVolume(volume)
 	if err != nil {
-		fmt.Printf("设置系统音量失败: %v\n", err)
+		logging.L().With("module", "audio").Warn("设置系统音量失败", "err", err)
 		return err
 	}
-	
-	fmt.Printf("系统音量设置为: %.0f%%\n", volume*100)
+
+	logging.L().With("module", "audio").Info("系统音量设置", "volume", volume)
 	return nil
 }
 

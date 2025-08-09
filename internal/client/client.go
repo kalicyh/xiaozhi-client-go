@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"myproject/internal/logging"
 	"myproject/internal/transport"
 )
 
@@ -64,7 +65,7 @@ func (c *Client) OpenWebsocket(ctx context.Context) error {
 		headers        map[string]string
 		tokenPlacement string
 	}
-	
+
 	var att attempt
 
 	// 公共头
@@ -181,11 +182,13 @@ func (c *Client) OpenWebsocket(ctx context.Context) error {
 	helloSent := false
 	helloRecv := false
 
+	log := logging.L().With("module", "ws")
 	// 在尝试前输出请求内容（已脱敏）
-	fmt.Printf("ws open: url=%s; headers=%v; token=%s\n", sanitizeURL(att.url), sanitizeHeaders(att.headers), att.tokenPlacement)
+	log.Info("ws open", "url", sanitizeURL(att.url), "headers", sanitizeHeaders(att.headers), "token", att.tokenPlacement)
 
 	report := func(phase string, base error) error {
-		diag := fmt.Errorf("ws %s: %v; url=%s; helloSent=%v; serverHello=%v; token=%s", phase, base, sanitizeURL(att.url), helloSent, helloRecv, att.tokenPlacement)
+		diag := fmt.Errorf("ws %s: %v", phase, base)
+		log.Warn("ws error", "phase", phase, "err", base, "url", sanitizeURL(att.url), "helloSent", helloSent, "serverHello", helloRecv, "token", att.tokenPlacement)
 		if c.OnError != nil {
 			c.OnError(ctx, diag)
 		}
@@ -245,7 +248,7 @@ func (c *Client) OpenWebsocket(ctx context.Context) error {
 	b, _ := json.Marshal(hello)
 
 	// 在发送前输出 hello payload
-	fmt.Printf("ws hello payload=%s\n", string(b))
+	log.Debug("ws hello", "payload", string(b))
 
 	if err := c.ws.SendText(ctx, b); err != nil {
 		_ = c.ws.Close()
@@ -282,6 +285,7 @@ func (c *Client) OpenMQTT(ctx context.Context) error {
 	if err := c.mqtt.Open(ctx, nil); err != nil { if c.OnError != nil { c.OnError(ctx, err) }; return err }
 	hello := HelloMessage{Type: "hello", Version: c.cfg.ProtocolVersion, Transport: "udp", AudioParams: c.cfg.Audio, Features: map[string]any{"mcp": true}}
 	b, _ := json.Marshal(hello)
+	logging.L().With("module", "mqtt").Debug("mqtt hello", "payload", string(b))
 	return c.mqtt.SendText(ctx, b)
 }
 

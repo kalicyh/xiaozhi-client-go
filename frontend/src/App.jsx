@@ -12,7 +12,7 @@ const RT = typeof window !== 'undefined' && window.runtime
 const EOn = RT ? EventsOn : (event, cb) => { console.warn('[Mock] EventsOn', event); return () => {} }
 const EEmit = RT ? EventsEmit : (...args) => { console.warn('[Mock] EventsEmit', args) }
 
-function Message({ role, text, time, detail, onShowDetail }) {
+function Message({ role, text, time, detail, onShowDetail, avatar }) {
   if (role === 'system') {
     const clickable = !!detail
     return (
@@ -30,7 +30,7 @@ function Message({ role, text, time, detail, onShowDetail }) {
   
   return (
     <div className={`msg-row ${role === 'user' ? 'right' : 'left'}`}>
-      {role !== 'user' && <div className="avatar">🤖</div>}
+      {role !== 'user' && <div className="avatar">{avatar || '🤖'}</div>}
       <div className={`bubble ${role}`}>
         <div className="text" dangerouslySetInnerHTML={{ __html: text }}></div>
         <div className="meta">{time}</div>
@@ -171,6 +171,20 @@ function App() {
   const pendingMessagesRef = useRef([]) // 新增：待发送消息队列
   const disconnectNoticeRef = useRef(0) // 新增：断开提示去重时间戳
   const [detailModal, setDetailModal] = useState({ open: false, title: '', content: '' }) // 新增：详情弹窗
+  
+  // 新增：按 session 追踪 TTS 消息（用于 sentence_end 校对替换）
+  const ttsMsgRef = useRef(new Map())
+  // 新增：头像与拦截
+  const pendingAvatarRef = useRef(null)
+  const lastUserMsgRef = useRef("")
+  const interceptQuotaRef = useRef(0)
+  // 新增：自动连接标志（用于抑制“已连接”重复提示）
+  const autoConnectingRef = useRef(false)
+
+  // 新增：更新已有消息文本
+  const updateMsgText = (id, newHtmlText) => {
+    setMessages(prev => prev.map(m => (m.id === id ? { ...m, text: newHtmlText } : m)))
+  }
 
   // 初始化音频播放器
   useEffect(() => {
@@ -323,11 +337,43 @@ function App() {
           }
         }
 
-        // tts
+        // tts（按句处理：start 先显示，end 如不同则替换）
         if (obj && obj.type === 'tts') {
-          const st = obj.state
+          const state = obj.state || obj.status
+          const sessionId = obj.session_id || obj.sessionId || 'default'
+          const content = obj.text ?? obj.content ?? ''
+
+          if (state === 'sentence_start') {
+            const id = crypto.randomUUID()
+            const html = escapeHtml(String(content))
+            // 消费一次待用头像
+            let avatarEmoji
+            if (pendingAvatarRef.current) { avatarEmoji = pendingAvatarRef.current; pendingAvatarRef.current = null }
+            setMessages(prev => [...prev, { id, role: 'bot', text: html, time: formatTime(), avatar: avatarEmoji }])
+            ttsMsgRef.current.set(sessionId, { id, text: html })
+            return
+          }
+          if (state === 'sentence_end') {
+            const html = escapeHtml(String(content))
+            const rec = ttsMsgRef.current.get(sessionId)
+            if (rec) {
+              if (rec.text !== html) {
+                updateMsgText(rec.id, html)
+              }
+              ttsMsgRef.current.delete(sessionId)
+              return
+            } else {
+              // 若未找到对应 start，直接追加（同样消耗头像）
+              let avatarEmoji
+              if (pendingAvatarRef.current) { avatarEmoji = pendingAvatarRef.current; pendingAvatarRef.current = null }
+              appendMsg('bot', html, undefined, avatarEmoji)
+              return
+            }
+          }
+
+          // 其它 TTS 状态保持原有概括
           const sr = obj.sample_rate || obj.sampleRate
-          const stTxt = st === 'start' ? '开始' : (st === 'stop' ? '结束' : String(st))
+          const stTxt = state === 'start' ? '开始' : (state === 'stop' ? '结束' : String(state))
           summarized = `TTS ${escapeHtml(stTxt)} · 采样率 ${escapeHtml(String(sr || '?'))}Hz`
           return appendMsg('system', summarized, JSON.stringify(obj, null, 2))
         }
@@ -343,7 +389,27 @@ function App() {
       } catch {
         display = String(payload)
       }
-      appendMsg('bot', escapeHtml(display))
+
+      // 新：每次用户发送后仅拦截两条；第二条若为纯表情则作为下次回复头像
+      const plain = String(display || '').trim()
+      if (interceptQuotaRef.current > 0) {
+        // 第一条优先拦截：与最近用户消息完全一致视为回显
+        if (interceptQuotaRef.current === 2 && plain === lastUserMsgRef.current) {
+          interceptQuotaRef.current -= 1
+          return
+        }
+        // 第二条：若是纯表情则缓存为下一次回复头像
+        if (interceptQuotaRef.current === 1 && isEmojiOnly(plain)) {
+          pendingAvatarRef.current = plain
+          interceptQuotaRef.current -= 1
+          return
+        }
+      }
+
+      // 消费一次待用头像
+      let avatarEmoji
+      if (pendingAvatarRef.current) { avatarEmoji = pendingAvatarRef.current; pendingAvatarRef.current = null }
+      appendMsg('bot', escapeHtml(display), undefined, avatarEmoji)
     })
     
     // 音频数据监听
@@ -461,7 +527,12 @@ function App() {
       setConnecting(false)
       const proto = (info && info.protocol) || form.protocol
       setSubtitle(`在线 · ${proto === 'ws' ? 'WebSocket' : 'MQTT'}`)
-      appendMsg('system', `已连接（${proto}）`)
+      // 若是自动连接触发，则不再追加“已连接（…）”提示，避免两条系统消息
+      if (!autoConnectingRef.current) {
+        appendMsg('system', `已连接（${proto}）`)
+      }
+      // 连接已建立，重置自动连接标志
+      autoConnectingRef.current = false
       setConnected(true)
       // 发送排队消息
       const queued = pendingMessagesRef.current || []
@@ -476,6 +547,8 @@ function App() {
       setSubtitle('离线')
       notifyDisconnectedOnce()
       setConnected(false)
+      // 断开连接重置自动连接标志
+      autoConnectingRef.current = false
       // 断开连接时停止音频播放并重置播放标志
       if (audioPlayerRef.current) {
         audioPlayerRef.current.stop()
@@ -486,6 +559,8 @@ function App() {
       setConnecting(false)
       setConnected(false)
       setCurrentPage('settings')
+      // 出错时重置自动连接标志
+      autoConnectingRef.current = false
 
       const raw = String(err || '')
       const lower = raw.toLowerCase()
@@ -541,8 +616,8 @@ function App() {
     return `${h}:${m}`
   }
 
-  const appendMsg = (role, text, detail) => {
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, text, time: formatTime(), detail }])
+  const appendMsg = (role, text, detail, avatar) => {
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, text, time: formatTime(), detail, avatar }])
   }
 
   // 新增：断开提示（去重，2 秒内只提示一次）
@@ -555,6 +630,11 @@ function App() {
 
   const onSend = (text) => {
     appendMsg('user', escapeHtml(text))
+    // 记录最近用户文本并设置拦截配额；清空待用头像
+    lastUserMsgRef.current = String(text).trim()
+    interceptQuotaRef.current = 2
+    pendingAvatarRef.current = null
+
     if (connected) {
       EEmit('send_text', text)
       return
@@ -562,10 +642,12 @@ function App() {
     // 未连接：排队并自动连接
     pendingMessagesRef.current.push(text)
     if (!connecting) {
-      appendMsg('system', '未连接，正在使用当前配置自动连接…')
+      autoConnectingRef.current = true
+      const proto = form.protocol || 'ws'
+      appendMsg('system', `自动连接（${proto}）`)
       handleConnect(form)
     } else {
-      appendMsg('system', '正在连接中，消息将稍后发送')
+      // 已在连接中，避免重复系统提示
     }
   }
 
@@ -662,7 +744,17 @@ function App() {
         <>
           {/* 头部已融合到 CustomTitleBar */}
           <div className="msg-list" ref={listRef}>
-            {messages.map(m => (<Message key={m.id} role={m.role} text={m.text} time={m.time} detail={m.detail} onShowDetail={(title, content) => setDetailModal({ open: true, title, content })} />))}
+            {messages.map(m => (
+              <Message
+                key={m.id}
+                role={m.role}
+                text={m.text}
+                time={m.time}
+                detail={m.detail}
+                avatar={m.avatar}
+                onShowDetail={(title, content) => setDetailModal({ open: true, title, content })}
+              />
+            ))}
           </div>
           <InputBar onSend={onSend} onPTTStart={startPTT} onPTTStop={stopPTT} recording={recording} pttTime={pttTime} />
         </>
@@ -702,6 +794,15 @@ function toBool(v){
   if (typeof v === 'boolean') return v
   if (typeof v === 'string') return v === 'true' || v === '1' || v.toLowerCase() === 'yes'
   return !!v
+}
+
+// 简易“纯表情”识别：若整条文本仅包含 1 个表情图形（含变体），则视为表情
+function isEmojiOnly(s) {
+  if (!s) return false
+  try {
+    if (/^\p{Extended_Pictographic}(\uFE0F|\uFE0E)?$/u.test(s)) return true
+  } catch (_) { /* 属性不支持时走回退 */ }
+  return /^[\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{2600}-\u{27BF}]\uFE0F?$/u.test(s)
 }
 
 

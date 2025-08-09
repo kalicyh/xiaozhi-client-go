@@ -1,9 +1,8 @@
 package audio
 
 import (
-	"fmt"
-	
 	"github.com/itchyny/volume-go"
+	"myproject/internal/logging"
 )
 
 // VolumeController 系统音量控制器
@@ -14,7 +13,6 @@ type VolumeController struct {
 // NewVolumeController 创建新的音量控制器
 func NewVolumeController() *VolumeController {
 	vc := &VolumeController{}
-	fmt.Println("使用 volume-go 库进行系统音量控制")
 	return vc
 }
 
@@ -44,11 +42,11 @@ func (vc *VolumeController) SetSystemVolume(vol float64) error {
 	
 	err := volume.SetVolume(volumePercent)
 	if err != nil {
-		return fmt.Errorf("设置系统音量失败: %v", err)
+		return err
 	}
 	
 	vc.lastVolume = vol
-	fmt.Printf("系统音量已设置为: %d%%\n", volumePercent)
+	logging.L().With("module", "audio").Debug("系统音量设置", "percent", volumePercent)
 	return nil
 }
 
