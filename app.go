@@ -11,15 +11,18 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"myproject/internal/audio"
 	"myproject/internal/client"
 	"myproject/internal/store"
 )
 
 // App struct
 type App struct {
-	client *client.Client
-	store  *store.DB
-	ctx    context.Context
+	client          *client.Client
+	store           *store.DB
+	ctx             context.Context
+	opusDecoder     *audio.OpusDecoder
+	volumeController *audio.VolumeController
 }
 
 // NewApp creates a new App application struct
@@ -45,6 +48,24 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.store, _ = store.Open("xiaozhi.db")
 	_ = a.store.InitConfig()
+	
+	// 初始化 Opus 解码器（24kHz 单声道）
+	var err error
+	a.opusDecoder, err = audio.NewOpusDecoder(24000, 1)
+	if err != nil {
+		fmt.Printf("警告: Opus 解码器初始化失败: %v\n", err)
+	} else {
+		fmt.Println("Opus 解码器初始化成功")
+	}
+	
+	// 初始化音量控制器
+	a.volumeController = audio.NewVolumeController()
+	if a.volumeController.IsVolumeSupported() {
+		fmt.Println("系统音量控制初始化成功")
+	} else {
+		fmt.Println("警告: 系统音量控制不可用")
+	}
+	
 	// events
 	runtime.EventsOn(ctx, "save_config", func(args ...interface{}) {
 		if len(args) == 1 {
@@ -98,7 +119,10 @@ func (a *App) startup(ctx context.Context) {
 				_ = a.store.SaveMessage(context.Background(), c.SessionID, "in", "json", string(b), time.Now().Unix())
 				runtime.EventsEmit(a.ctx, "text", string(b))
 			}
-			c.OnBinary = func(ctx context.Context, data []byte) { runtime.EventsEmit(a.ctx, "audio", data) }
+			c.OnBinary = func(ctx context.Context, data []byte) { 
+				// 在 Go 端解码 Opus 数据（MQTT 通道）
+				a.handleOpusAudio(data)
+			}
 			c.OnError = func(ctx context.Context, err error) { runtime.EventsEmit(a.ctx, "error", err.Error()) }
 			c.OnClosed = func() { runtime.EventsEmit(a.ctx, "disconnected") }
 			if err := c.OpenMQTT(context.Background()); err == nil {
@@ -158,7 +182,10 @@ func (a *App) startup(ctx context.Context) {
 				_ = a.store.SaveMessage(context.Background(), c.SessionID, "in", "json", string(b), time.Now().Unix())
 				runtime.EventsEmit(a.ctx, "text", string(b))
 			}
-			c.OnBinary = func(ctx context.Context, data []byte) { runtime.EventsEmit(a.ctx, "audio", data) }
+			c.OnBinary = func(ctx context.Context, data []byte) { 
+				// 在 Go 端解码 Opus 数据（WebSocket 通道）
+				a.handleOpusAudio(data)
+			}
 			c.OnError = func(ctx context.Context, err error) { runtime.EventsEmit(a.ctx, "error", err.Error()) }
 			c.OnClosed = func() { runtime.EventsEmit(a.ctx, "disconnected") }
 			if err := c.OpenWebsocket(context.Background()); err == nil {
@@ -215,7 +242,10 @@ func (a *App) startup(ctx context.Context) {
 					_ = a.store.SaveMessage(context.Background(), a.client.SessionID, "in", "json", string(b), time.Now().Unix())
 					runtime.EventsEmit(a.ctx, "text", string(b))
 				}
-				a.client.OnBinary = func(ctx context.Context, data []byte) { runtime.EventsEmit(a.ctx, "audio", data) }
+				a.client.OnBinary = func(ctx context.Context, data []byte) { 
+					// 在 Go 端解码 Opus 数据（协议切换）
+					a.handleOpusAudio(data)
+				}
 				a.client.OnError = func(ctx context.Context, err error) { runtime.EventsEmit(a.ctx, "error", err.Error()) }
 				a.client.OnClosed = func() { runtime.EventsEmit(a.ctx, "disconnected") }
 			}
@@ -437,4 +467,68 @@ func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interfac
 	})
 
 	return nil
+}
+
+// handleOpusAudio 处理 Opus 音频数据，在 Go 端解码后发送 PCM 给前端
+func (a *App) handleOpusAudio(opusData []byte) {
+	if a.opusDecoder == nil {
+		fmt.Printf("Opus 解码器未初始化，数据长度: %d bytes，直接发送原始数据\n", len(opusData))
+		runtime.EventsEmit(a.ctx, "audio", opusData)
+		return
+	}
+
+	fmt.Printf("收到 Opus 数据: %d bytes\n", len(opusData))
+
+	// 使用 Go 端的 Opus 解码器解码
+	pcmData, err := a.opusDecoder.DecodeFrameToFloat32(opusData)
+	if err != nil {
+		fmt.Printf("Go Opus 解码失败 (数据长度: %d): %v，发送原始数据\n", len(opusData), err)
+		runtime.EventsEmit(a.ctx, "audio", opusData)
+		return
+	}
+
+	fmt.Printf("Go Opus 解码成功: %d bytes -> %d samples (模拟 opus.dll)\n", 
+		len(opusData), len(pcmData))
+
+	// 发送解码后的 PCM 数据给前端
+	runtime.EventsEmit(a.ctx, "audio_pcm", pcmData)
+}
+
+// GetSystemVolume 获取系统音量 (0.0 - 1.0)
+func (a *App) GetSystemVolume() float64 {
+	if a.volumeController == nil {
+		return 1.0 // 默认音量
+	}
+	
+	volume, err := a.volumeController.GetSystemVolume()
+	if err != nil {
+		fmt.Printf("获取系统音量失败: %v\n", err)
+		return 1.0
+	}
+	
+	return volume
+}
+
+// SetSystemVolume 设置系统音量 (0.0 - 1.0)
+func (a *App) SetSystemVolume(volume float64) error {
+	if a.volumeController == nil {
+		return fmt.Errorf("音量控制器未初始化")
+	}
+	
+	err := a.volumeController.SetSystemVolume(volume)
+	if err != nil {
+		fmt.Printf("设置系统音量失败: %v\n", err)
+		return err
+	}
+	
+	fmt.Printf("系统音量设置为: %.0f%%\n", volume*100)
+	return nil
+}
+
+// IsSystemVolumeSupported 检查是否支持系统音量控制
+func (a *App) IsSystemVolumeSupported() bool {
+	if a.volumeController == nil {
+		return false
+	}
+	return a.volumeController.IsVolumeSupported()
 }

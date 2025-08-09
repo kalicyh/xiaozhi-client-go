@@ -6,6 +6,8 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/hraban/opus v0.0.0-20230925203106-0188a62cb302
+	github.com/itchyny/volume-go v0.2.2
 	github.com/wailsapp/wails/v2 v2.10.2
 	modernc.org/sqlite v1.29.10
 )
@@ -25,6 +27,7 @@ require (
 	github.com/leaanthony/u v1.1.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/moutend/go-wca v0.2.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect

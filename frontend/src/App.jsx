@@ -1,17 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import { EventsOn, EventsEmit } from '../wailsjs/runtime/runtime'
+import { GetSystemVolume, SetSystemVolume, IsSystemVolumeSupported } from '../wailsjs/go/main/App'
+import AudioPlayer from './audio/AudioPlayer.js'
 
 // 安全包装：在浏览器直开或未通过 Wails 运行时，window.runtime 可能不存在
 const RT = typeof window !== 'undefined' && window.runtime
 const EOn = RT ? EventsOn : (event, cb) => { console.warn('[Mock] EventsOn', event); return () => {} }
 const EEmit = RT ? EventsEmit : (...args) => { console.warn('[Mock] EventsEmit', args) }
 
-function ChatHeader({ onToggleSettings, subtitle }) {
+function ChatHeader({ onToggleSettings, subtitle, isPlayingAudio, audioStats }) {
   return (
     <div className="chat-header">
       <div className="title">小智</div>
-      <div className={`subtitle ${subtitle.includes('离线') ? 'offline' : 'online'}`}>{subtitle}</div>
+      <div className={`subtitle ${subtitle.includes('离线') ? 'offline' : 'online'}`}>
+        {subtitle}
+        {isPlayingAudio && audioStats && (
+          <span className="audio-indicator">
+            🔊 {audioStats.packetsReceived} 包 
+            {audioStats.smoothRate && ` | 平滑: ${audioStats.smoothRate}`}
+            {audioStats.quality && ` | 音质: ${audioStats.quality}`}
+          </span>
+        )}
+      </div>
       <div className="spacer" />
       <button className="icon-btn" title="连接设置" onClick={onToggleSettings}>⚙️</button>
     </div>
@@ -19,6 +30,16 @@ function ChatHeader({ onToggleSettings, subtitle }) {
 }
 
 function Message({ role, text, time }) {
+  if (role === 'system') {
+    return (
+      <div className="msg-row left" style={{justifyContent: 'center'}}>
+        <div className="bubble system">
+          <div className="text" dangerouslySetInnerHTML={{ __html: text }}></div>
+        </div>
+      </div>
+    )
+  }
+  
   return (
     <div className={`msg-row ${role === 'user' ? 'right' : 'left'}`}>
       {role !== 'user' && <div className="avatar">🤖</div>}
@@ -67,9 +88,82 @@ function InputBar({ onSend, onPTTStart, onPTTStop, recording, pttTime }) {
   )
 }
 
-function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connecting }) {
+function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connecting, audioPlayer, isPlayingAudio }) {
+  const [volume, setVolume] = useState(100) // 添加音量状态
+  const [systemVolumeSupported, setSystemVolumeSupported] = useState(false)
+  const [useSystemVolume, setUseSystemVolume] = useState(true) // 是否使用系统音量
+  const volumeTimeoutRef = useRef(null) // 音量设置防抖
+  
+  // 检查系统音量支持
+  useEffect(() => {
+    const checkSystemVolumeSupport = async () => {
+      try {
+        const supported = await IsSystemVolumeSupported()
+        setSystemVolumeSupported(supported)
+        console.log('系统音量控制支持:', supported)
+      } catch (error) {
+        console.warn('检查系统音量支持失败:', error)
+        setSystemVolumeSupported(false)
+      }
+    }
+    checkSystemVolumeSupport()
+  }, [])
+  
+  // 初始化音量
+  useEffect(() => {
+    const initVolume = async () => {
+      if (useSystemVolume && systemVolumeSupported) {
+        try {
+          const systemVol = await GetSystemVolume()
+          setVolume(Math.round(systemVol * 100))
+          console.log('当前系统音量:', Math.round(systemVol * 100) + '%')
+        } catch (error) {
+          console.warn('获取系统音量失败:', error)
+          setVolume(50)
+        }
+      } else if (audioPlayer) {
+        const currentVolume = audioPlayer.getVolume()
+        if (typeof currentVolume === 'number') {
+          setVolume(Math.round(currentVolume * 100))
+        }
+      }
+    }
+    initVolume()
+    
+    // 清理函数：清除定时器
+    return () => {
+      if (volumeTimeoutRef.current) {
+        clearTimeout(volumeTimeoutRef.current)
+      }
+    }
+  }, [audioPlayer, useSystemVolume, systemVolumeSupported])
+  
   if (!open) return null
   const set = (k, v) => setForm(s => ({ ...s, [k]: v }))
+  
+  const handleVolumeChange = async (newVolume) => {
+    const volumeValue = parseInt(newVolume)
+    setVolume(volumeValue) // 立即更新UI
+    
+    // 清除之前的定时器（如果有）
+    if (volumeTimeoutRef.current) {
+      clearTimeout(volumeTimeoutRef.current)
+    }
+    
+    // 立即设置音量，实现实时跟随
+    if (useSystemVolume && systemVolumeSupported) {
+      try {
+        await SetSystemVolume(volumeValue / 100)
+        console.log('系统音量实时设置为:', volumeValue + '%')
+      } catch (error) {
+        console.error('设置系统音量失败:', error)
+      }
+    }
+    
+    if (audioPlayer) {
+      audioPlayer.setVolume(volumeValue / 100)
+    }
+  }
   return (
     <div className="settings">
       <div className="row">
@@ -146,6 +240,55 @@ function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connectin
           </select>
         </div>
       )}
+      
+
+      
+      {audioPlayer && (
+        <>
+          {systemVolumeSupported && (
+            <div className="row">
+              <label>音量控制</label>
+              <select 
+                value={useSystemVolume ? 'system' : 'app'} 
+                onChange={(e) => setUseSystemVolume(e.target.value === 'system')}
+                style={{flex: 1}}
+              >
+                <option value="system">系统音量</option>
+                <option value="app">应用音量</option>
+              </select>
+            </div>
+          )}
+          <div className="row">
+            <label>{systemVolumeSupported && useSystemVolume ? '系统音量' : '应用音量'}</label>
+            <input 
+              type="range" 
+              min="0" 
+              max="100" 
+              value={volume}
+              onChange={(e) => handleVolumeChange(e.target.value)}
+              style={{
+                flex: 1, 
+                marginRight: '8px',
+                WebkitAppearance: 'none',
+                appearance: 'none',
+                height: '6px',
+                borderRadius: '3px',
+                background: `linear-gradient(to right, #007acc 0%, #007acc ${volume}%, #ddd ${volume}%, #ddd 100%)`,
+                outline: 'none'
+              }}
+            />
+            <span style={{
+              fontSize: '12px', 
+              color: volume > 80 ? '#ff6b6b' : volume > 50 ? '#ffa726' : '#4caf50', 
+              fontWeight: 'bold',
+              minWidth: '35px',
+              textAlign: 'right'
+            }}>
+              {volume}%
+            </span>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -199,8 +342,71 @@ function App() {
   const [pttTime, setPttTime] = useState(0)
   const [connecting, setConnecting] = useState(false)
   const [subtitle, setSubtitle] = useState('离线')
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false) // 音频播放状态
+  const [audioStats, setAudioStats] = useState({ 
+    packetsReceived: 0, 
+    lastPacketTime: 0,
+    smoothRate: null,
+    quality: 'good'
+  })
   const listRef = useRef(null)
   const timerRef = useRef(null)
+  const audioPlayerRef = useRef(null) // 音频播放器引用
+
+  // 初始化音频播放器
+  useEffect(() => {
+    audioPlayerRef.current = new AudioPlayer()
+    
+    // 暴露到全局以便调试
+    window.audioPlayerRef = audioPlayerRef
+    
+    // 设置音频播放器回调
+    audioPlayerRef.current.onStartPlay = () => {
+      setIsPlayingAudio(true)
+      console.log('开始播放音频')
+      
+      // 只在开始新的播放会话时显示消息
+      const now = Date.now()
+      if (!window.lastPlayStartMessage || now - window.lastPlayStartMessage > 2000) {
+        appendMsg('system', '🔊 开始播放语音流')
+        window.lastPlayStartMessage = now
+      }
+    }
+    
+    audioPlayerRef.current.onStopPlay = () => {
+      setIsPlayingAudio(false)
+      console.log('停止播放音频')
+      
+      // 延迟显示停止消息，避免短暂停顿时的重复消息
+      clearTimeout(window.stopPlayTimeout)
+      window.stopPlayTimeout = setTimeout(() => {
+        if (!audioPlayerRef.current?.isPlaying) {
+          appendMsg('system', '🔇 语音播放完成')
+          // 重置音频统计
+          setAudioStats({ packetsReceived: 0, lastPacketTime: 0 })
+        }
+      }, 1000) // 1秒后确认真的停止了才显示消息
+    }
+    
+    audioPlayerRef.current.onError = (error) => {
+      console.error('音频播放错误:', error)
+      setIsPlayingAudio(false)
+      
+      // 限制错误消息频率
+      const now = Date.now()
+      if (!window.lastPlayErrorMessage || now - window.lastPlayErrorMessage > 5000) {
+        appendMsg('system', `❌ 音频播放失败: ${error.message}`)
+        window.lastPlayErrorMessage = now
+      }
+    }
+
+    // 清理函数
+    return () => {
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.destroy()
+      }
+    }
+  }, [])
 
   useEffect(() => {
     // 消息 & 连接状态监听（使用安全包装）
@@ -214,6 +420,118 @@ function App() {
       }
       appendMsg('bot', escapeHtml(display))
     })
+    
+    // 音频数据监听
+    const offAudio = EOn('audio', async (audioData) => {
+      if (audioPlayerRef.current && audioData) {
+        try {
+          // 检查音频数据类型和格式
+          let audioBytes
+          
+          if (audioData instanceof ArrayBuffer) {
+            audioBytes = new Uint8Array(audioData)
+          } else if (audioData instanceof Uint8Array) {
+            audioBytes = audioData
+          } else if (Array.isArray(audioData)) {
+            audioBytes = new Uint8Array(audioData)
+          } else if (typeof audioData === 'string') {
+            try {
+              const binaryString = atob(audioData)
+              audioBytes = new Uint8Array(binaryString.length)
+              for (let i = 0; i < binaryString.length; i++) {
+                audioBytes[i] = binaryString.charCodeAt(i)
+              }
+              console.log('Base64 音频数据解码成功')
+            } catch (base64Error) {
+              console.error('Base64 解码失败:', base64Error)
+              appendMsg('system', '❌ 音频数据格式错误 (Base64)')
+              return
+            }
+          } else {
+            console.warn('未知的音频数据格式:', typeof audioData, audioData)
+            appendMsg('system', '⚠️ 收到未知格式的音频数据')
+            return
+          }
+          
+          // 静默处理小音频包，只在控制台记录
+          console.log(`处理音频数据: ${audioBytes.length} bytes`)
+          
+          // 更新音频统计
+          setAudioStats(prev => ({
+            packetsReceived: prev.packetsReceived + 1,
+            lastPacketTime: Date.now()
+          }))
+          
+          // 检查数据是否看起来像有效帧
+          if (audioBytes.length < 10) {
+            console.warn('音频数据太小，跳过处理')
+            return
+          }
+          
+          // 播放音频（静默处理，不显示每个包的消息）
+          console.log(`处理音频包: ${audioBytes.length} bytes`)
+          
+          const success = await audioPlayerRef.current.playAudio(audioBytes, 'opus')
+          if (!success) {
+            // 只在连续失败时显示错误消息
+            const now = Date.now()
+            if (!window.lastAudioError || now - window.lastAudioError > 5000) {
+              appendMsg('system', '❌ 音频播放遇到问题')
+              window.lastAudioError = now
+            }
+          }
+        } catch (error) {
+          console.error('处理音频数据失败:', error)
+          
+          // 限制错误消息频率
+          const now = Date.now()
+          if (!window.lastAudioProcessError || now - window.lastAudioProcessError > 3000) {
+            appendMsg('system', `❌ 音频处理错误: ${error.message}`)
+            window.lastAudioProcessError = now
+          }
+        }
+      }
+    })
+    
+    // Go 端解码的 PCM 音频数据监听
+    const offAudioPCM = EOn('audio_pcm', async (pcmData) => {
+      if (audioPlayerRef.current && pcmData) {
+        try {
+          console.log(`收到 Go 端 PCM 数据: ${pcmData.length} samples`)
+          
+          // 使用新的 Go PCM 播放方法
+          const success = await audioPlayerRef.current.playGoPCMAudio(pcmData)
+          
+          // 获取处理器统计信息并更新音频统计
+          const processorStats = audioPlayerRef.current.goPCMProcessor.getStats()
+          setAudioStats(prev => ({
+            packetsReceived: prev.packetsReceived + 1,
+            lastPacketTime: Date.now(),
+            smoothRate: processorStats.smoothRate,
+            quality: success ? 'good' : 'poor'
+          }))
+          
+          if (!success) {
+            // 只在连续失败时显示错误消息
+            const now = Date.now()
+            if (!window.lastPCMError || now - window.lastPCMError > 5000) {
+              appendMsg('system', '❌ Go PCM 音频播放遇到问题')
+              window.lastPCMError = now
+            }
+          }
+        } catch (error) {
+          console.error('处理 Go PCM 数据失败:', error)
+          
+          // 限制错误消息频率
+          const now = Date.now()
+          if (!window.lastPCMProcessError || now - window.lastPCMProcessError > 3000) {
+            appendMsg('system', `❌ Go PCM 处理错误: ${error.message}`)
+            window.lastPCMProcessError = now
+          }
+        }
+      }
+    })
+    
     const offConnected = EOn('connected', (info) => {
       setConnecting(false)
       const proto = (info && info.protocol) || form.protocol
@@ -224,6 +542,10 @@ function App() {
     const offDisconnected = EOn('disconnected', () => {
       setSubtitle('离线')
       appendMsg('bot', '已断开连接')
+      // 断开连接时停止音频播放
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.stop()
+      }
     })
     const offError = EOn('error', (err) => {
       setConnecting(false)
@@ -247,7 +569,7 @@ function App() {
     // 请求加载配置
     EEmit('load_config')
     return () => {
-      offText && offText(); offConnected && offConnected(); offDisconnected && offDisconnected(); offError && offError(); offConfig && offConfig()
+      offText && offText(); offAudio && offAudio(); offAudioPCM && offAudioPCM(); offConnected && offConnected(); offDisconnected && offDisconnected(); offError && offError(); offConfig && offConfig()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -340,8 +662,22 @@ function App() {
           未检测到 Wails 运行环境。请使用 "wails dev" 或 "wails build" 运行应用。
         </div>
       )}
-      <ChatHeader onToggleSettings={()=> setShowSettings(s=>!s)} subtitle={subtitle} />
-      <SettingsPanel open={showSettings} form={form} setForm={setForm} onConnect={handleConnect} onDisconnect={handleDisconnect} connecting={connecting} />
+      <ChatHeader 
+        onToggleSettings={()=> setShowSettings(s=>!s)} 
+        subtitle={subtitle} 
+        isPlayingAudio={isPlayingAudio} 
+        audioStats={audioStats}
+      />
+      <SettingsPanel 
+        open={showSettings} 
+        form={form} 
+        setForm={setForm} 
+        onConnect={handleConnect} 
+        onDisconnect={handleDisconnect} 
+        connecting={connecting}
+        audioPlayer={audioPlayerRef.current}
+        isPlayingAudio={isPlayingAudio}
+      />
       <div className="msg-list" ref={listRef}>
         {messages.map(m => (<Message key={m.id} role={m.role} text={m.text} time={m.time} />))}
       </div>
@@ -366,3 +702,7 @@ function toBool(v){
   if (typeof v === 'string') return v === 'true' || v === '1' || v.toLowerCase() === 'yes'
   return !!v
 }
+
+
+
+

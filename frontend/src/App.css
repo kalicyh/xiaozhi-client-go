@@ -172,7 +172,17 @@ body { margin: 0; background: #0e1621; }
 }
 .chat-header { padding: 14px 18px; background: #0f1a24; color: #fff; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(255,255,255,.06) }
 .chat-header .title { font-weight: 700; }
-.chat-header .subtitle { opacity: .6; font-size: 12px; }
+.chat-header .subtitle { opacity: .6; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.chat-header .subtitle .audio-indicator { 
+  opacity: 1; 
+  font-size: 14px; 
+  animation: audioPlaying 1.5s infinite; 
+}
+
+@keyframes audioPlaying {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
 .chat-header .spacer { flex: 1 }
 .icon-btn { background: transparent; border: none; color: #dce7f1; font-size: 16px; cursor: pointer; }
 .icon-btn:hover { opacity: .8 }
@@ -185,6 +195,50 @@ body { margin: 0; background: #0e1621; }
 .settings .primary { background: #2b8a3e; color: #fff; border: none; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
 .settings .danger { background: #b23; color: #fff; border: none; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
 
+/* 音量滑块样式 */
+.settings input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  border: none;
+  outline: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.settings input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #007acc;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.settings input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #007acc;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.settings input[type="range"]:hover::-webkit-slider-thumb {
+  background: #0099ff;
+  transform: scale(1.1);
+}
+
+.settings input[type="range"]:hover::-moz-range-thumb {
+  background: #0099ff;
+  transform: scale(1.1);
+}
+
 /* Message list */
 .msg-list { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .msg-row { display: flex; gap: 8px; align-items: flex-end; }
@@ -196,6 +250,7 @@ body { margin: 0; background: #0e1621; }
 .bubble { max-width: 70%; padding: 10px 12px; border-radius: 12px; color: #e9eef3; position: relative; word-break: break-word; }
 .bubble.user { background: #2b5278; border-top-right-radius: 4px; }
 .bubble.bot { background: #182533; border-top-left-radius: 4px; }
+.bubble.system { background: #1a5d1a; border-radius: 8px; font-size: 12px; opacity: 0.8; padding: 6px 10px; max-width: 50%; text-align: center; }
 .bubble .meta { opacity: .55; font-size: 11px; margin-top: 6px; text-align: right; }
 
 .input-bar { display: flex; gap: 10px; padding: 10px; background: #0f1a24; border-top: 1px solid rgba(255,255,255,.06); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
