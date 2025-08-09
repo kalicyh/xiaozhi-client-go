@@ -367,6 +367,35 @@ func (a *App) startup(ctx context.Context) {
 			}
 		}
 	})
+
+	// 额外：数据库管理事件
+	runtime.EventsOn(ctx, "db_recent_messages", func(args ...interface{}) {
+		limit := 50
+		if len(args) == 1 {
+			if n, ok := args[0].(int); ok && n > 0 { limit = n }
+		}
+		if msgs, err := a.store.RecentMessages(context.Background(), limit); err == nil {
+			b, _ := json.Marshal(msgs)
+			runtime.EventsEmit(ctx, "db_recent_messages_result", string(b))
+		} else {
+			runtime.EventsEmit(ctx, "error", fmt.Sprintf("查询消息失败: %v", err))
+		}
+	})
+	runtime.EventsOn(ctx, "db_clear_messages", func(_ ...interface{}) {
+		if err := a.store.ClearMessages(context.Background()); err != nil {
+			runtime.EventsEmit(ctx, "error", fmt.Sprintf("清空消息失败: %v", err))
+		} else {
+			runtime.EventsEmit(ctx, "db_messages_cleared")
+		}
+	})
+	runtime.EventsOn(ctx, "db_delete_config", func(args ...interface{}) {
+		if len(args) == 1 { if k, ok := args[0].(string); ok { _ = a.store.DeleteConfig(context.Background(), k) } }
+		runtime.EventsEmit(ctx, "config", map[string]string{})
+	})
+	runtime.EventsOn(ctx, "db_clear_config", func(_ ...interface{}) {
+		_ = a.store.ClearConfig(context.Background())
+		runtime.EventsEmit(ctx, "config", map[string]string{})
+	})
 }
 
 // Greet returns a greeting for the given name

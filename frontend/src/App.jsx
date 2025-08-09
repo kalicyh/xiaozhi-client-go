@@ -109,7 +109,7 @@ function InputBar({ onSend, onPTTStart, onPTTStop, recording, pttTime }) {
 function App() {
   const [messages, setMessages] = useState([])
   const [recording, setRecording] = useState(false)
-  const [currentPage, setCurrentPage] = useState('chat') // 'chat' 或 'settings'
+  const [currentPage, setCurrentPage] = useState('chat') // 'chat' | 'settings' | 'db'
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight })
   const [form, setForm] = useState(() => ({
     protocol: 'ws',
@@ -124,36 +124,16 @@ function App() {
     ota_url: 'https://api.tenclass.net/xiaozhi/ota/',
     ota_body: JSON.stringify({
       version: 2,
-      flash_size: 16777216,
-      minimum_free_heap_size: 66204,
-      mac_address: 'dc:da:0c:8f:d6:fc',
-      uuid: '22655a88-1649-4526-9fb7-9698ccf14e04',
-      chip_model_name: 'esp32c3',
-      chip_info: { model: 5, cores: 1, revision: 4, features: 18 },
+      mac_address: '',
+      uuid: '',
       application: {
         name: 'xiaozhi',
-        version: '1.1.9',
-        compile_time: 'Feb 17 2025T20:41:30Z',
-        idf_version: 'v5.4-dev-4076-gce6085349f',
-        elf_sha256: '27878af4f1e8f87dcca22b97a13a4da9ae9fcc43596fa3e6905b90957a1a42b9'
+        version: '0.0.1'
       },
-      partition_table: [
-        { label: 'nvs', type: 1, subtype: 2, address: 36864, size: 16384 },
-        { label: 'otadata', type: 1, subtype: 0, address: 53248, size: 8192 },
-        { label: 'phy_init', type: 1, subtype: 1, address: 61440, size: 4096 },
-        { label: 'model', type: 1, subtype: 130, address: 65536, size: 983040 },
-        { label: 'ota_0', type: 0, subtype: 16, address: 1048576, size: 6291456 },
-        { label: 'ota_1', type: 0, subtype: 17, address: 7340032, size: 6291456 }
-      ],
-      ota: { label: 'ota_0' },
       board: {
-        type: 'xmini-c3',
-        ssid: 'Redmi_Kalicyh_2.5G',
-        rssi: -54,
-        channel: 9,
-        ip: '192.168.31.234',
-        mac: 'dc:da:0c:8f:d6:fc'
+        type: 'xiaozhi-client-go'
       }
+
     }, null, 2),
     broker: '', pub: 'devices/+/tx', sub: 'devices/+/rx', username: '', password: '', client_id: '', device_id: '', token: '', token_method: 'header'
   }))
@@ -713,6 +693,8 @@ function App() {
               throw new Error('OTA POST内容不是有效的 JSON')
             }
           }
+          // 覆盖 uuid 为当前设备ID（系统MAC或输入的MAC）
+          if (effectiveDeviceId) { bodyObj.uuid = effectiveDeviceId }
           const headers = {
             'Content-Type': 'application/json',
             'Accept': '*/*',
@@ -767,6 +749,8 @@ function App() {
               throw new Error('OTA POST内容不是有效的 JSON')
             }
           }
+          // 覆盖 uuid 为当前设备ID（系统MAC或输入的MAC）
+          if (effectiveDeviceId) { bodyObj.uuid = effectiveDeviceId }
           const headers = {
             'Content-Type': 'application/json',
             'Accept': '*/*',
@@ -858,6 +842,24 @@ function App() {
 
   const handleDisconnect = () => { EEmit('disconnect') }
 
+  // 自动同步 OTA 请求体中的 uuid 与 mac_address 到当前设备ID
+  useEffect(() => {
+    const effectiveDeviceId = toBool(form.use_system_mac) ? (form.system_mac || '') : (form.device_id || '')
+    if (!effectiveDeviceId) return
+    try {
+      const obj = JSON.parse(form.ota_body || '{}')
+      let changed = false
+      if (obj.uuid !== effectiveDeviceId) { obj.uuid = effectiveDeviceId; changed = true }
+      if (typeof obj.mac_address !== 'undefined' && obj.mac_address !== effectiveDeviceId) {
+        obj.mac_address = effectiveDeviceId
+        changed = true
+      }
+      if (changed) {
+        setForm(prev => ({ ...prev, ota_body: JSON.stringify(obj, null, 2) }))
+      }
+    } catch {}
+  }, [form.system_mac, form.device_id, form.use_system_mac])
+
   return (
     <div className="app-container">
       <CustomTitleBar 
@@ -865,7 +867,8 @@ function App() {
         subtitle={subtitle}
         isPlayingAudio={isPlayingAudio}
         audioStats={audioStats}
-        onToggleSettings={() => setCurrentPage(currentPage === 'chat' ? 'settings' : 'chat')}
+        onToggleSettings={() => setCurrentPage(currentPage === 'settings' ? 'chat' : 'settings')}
+        onOpenDB={() => setCurrentPage(currentPage === 'db' ? 'chat' : 'db')}
       />
       <div className="chat">
         {!RT && (
@@ -887,6 +890,8 @@ function App() {
           onBack={() => setCurrentPage('chat')}
           windowSize={windowSize}
         />
+      ) : currentPage === 'db' ? (
+        <DBManager onBack={() => setCurrentPage('chat')} />
       ) : (
         <>
           {/* 头部已融合到 CustomTitleBar */}
@@ -926,21 +931,230 @@ function App() {
   )
 }
 
-export default App
+// 简易数据库管理页面：读取/展示/编辑 config 表 + 最近消息
+function DBManager({ onBack }) {
+  const [tab, setTab] = useState('config') // 'config' | 'messages'
+  const [rows, setRows] = useState([])
+  const [msgs, setMsgs] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [kv, setKv] = useState({ key: '', value: '' })
+  const [edit, setEdit] = useState(null) // {key,value}
 
-function escapeHtml(str){
-  return str
-    .replaceAll('&','&amp;')
-    .replaceAll('<','&lt;')
-    .replaceAll('>','&gt;')
-    .replaceAll('"','&quot;')
-    .replaceAll("'",'&#39;')
-}
+  const loadConfig = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const off = EventsOn('config', (m) => {
+        try {
+          const obj = typeof m === 'string' ? JSON.parse(m) : m
+          const entries = Object.entries(obj || {}).map(([k,v]) => ({ key:k, value:String(v) }))
+          setRows(entries)
+        } catch (e) {
+          setError(String(e?.message || e))
+        } finally {
+          setLoading(false)
+        }
+      })
+      EventsEmit('load_config')
+      setTimeout(() => off && off(), 1000)
+    } catch (e) {
+      setError(String(e?.message || e))
+      setLoading(false)
+    }
+  }
 
-function toBool(v){
-  if (typeof v === 'boolean') return v
-  if (typeof v === 'string') return v === 'true' || v === '1' || v.toLowerCase() === 'yes'
-  return !!v
+  const loadMessages = async (limit = 200) => {
+    setLoading(true)
+    setError('')
+    try {
+      const off = EventsOn('db_recent_messages_result', (s) => {
+        try {
+          const arr = typeof s === 'string' ? JSON.parse(s) : s
+          setMsgs(Array.isArray(arr) ? arr : [])
+        } catch (e) {
+          setError(String(e?.message || e))
+        } finally {
+          setLoading(false)
+        }
+      })
+      EventsEmit('db_recent_messages', limit)
+      setTimeout(() => off && off(), 1000)
+    } catch (e) {
+      setError(String(e?.message || e))
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (tab === 'config') loadConfig(); else loadMessages()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
+
+  const save = async () => {
+    if (!kv.key) return
+    try {
+      await EventsEmit('save_config', { [kv.key]: kv.value })
+      setKv({ key:'', value:'' })
+      loadConfig()
+    } catch (e) {
+      setError(String(e?.message || e))
+    }
+  }
+
+  const del = async (key) => {
+    try {
+      await EventsEmit('db_delete_config', key)
+      loadConfig()
+    } catch (e) {
+      setError(String(e?.message || e))
+    }
+  }
+
+  const clearConfig = async () => {
+    try {
+      await EventsEmit('db_clear_config')
+      loadConfig()
+    } catch (e) {
+      setError(String(e?.message || e))
+    }
+  }
+
+  const clearMessages = async () => {
+    try {
+      const off = EventsOn('db_messages_cleared', () => { setMsgs([]); setLoading(false); off && off() })
+      setLoading(true)
+      await EventsEmit('db_clear_messages')
+    } catch (e) {
+      setError(String(e?.message || e))
+      setLoading(false)
+    }
+  }
+
+  const fmtTime = (ts) => {
+    const n = Number(ts) * 1000
+    if (!n) return ''
+    const d = new Date(n)
+    const p = (x) => String(x).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+  }
+
+  const openEdit = (row) => setEdit({ key: row.key, value: row.value })
+  const closeEdit = () => setEdit(null)
+  const saveEdit = async () => {
+    if (!edit?.key) return
+    try {
+      await EventsEmit('save_config', { [edit.key]: edit.value })
+      setEdit(null)
+      loadConfig()
+    } catch (e) {
+      setError(String(e?.message || e))
+    }
+  }
+
+  return (
+    <div className="db-page">
+      <div className="db-toolbar">
+        <button onClick={onBack}>返回</button>
+        <h3 style={{margin:0}}>数据库管理</h3>
+        <div className="db-tabs" style={{marginLeft:16, display:'flex', gap:8}}>
+          <button className={tab==='config'? 'active' : ''} onClick={()=>setTab('config')}>配置</button>
+          <button className={tab==='messages'? 'active' : ''} onClick={()=>setTab('messages')}>消息记录</button>
+        </div>
+        <div className="db-actions">
+          {tab==='config' ? (
+            <>
+              <button onClick={loadConfig}>刷新配置</button>
+              <button onClick={clearConfig}>清空配置</button>
+            </>
+          ) : (
+            <>
+              <button onClick={()=>loadMessages(200)}>刷新消息</button>
+              <button onClick={clearMessages}>清空消息</button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="db-body">
+        {loading ? (
+          <div>加载中…</div>
+        ) : error ? (
+          <div style={{color:'tomato'}}>错误：{error}</div>
+        ) : tab==='config' ? (
+          <div>
+            <div className="db-grid" style={{marginBottom:8}}>
+              <div className="head">Key</div>
+              <div className="head">Value</div>
+              <div />
+              {rows.map((r, idx) => (
+                <div key={r.key + '_' + idx} className="db-row" style={{contents:'display'}}>
+                  <div className="db-cell">{r.key}</div>
+                  <div className="db-cell">{r.value}</div>
+                  <div>
+                    <button onClick={() => openEdit(r)}>编辑</button>
+                    <button style={{marginLeft:8}} onClick={() => del(r.key)}>删除</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{marginTop:16, borderTop:'1px solid rgba(255,255,255,0.1)', paddingTop:12}}>
+              <h4>新增</h4>
+              <div style={{display:'flex', gap:8}}>
+                <input placeholder="key" value={kv.key} onChange={e=>setKv(s=>({...s, key:e.target.value}))} style={{flex:1}} />
+                <input placeholder="value" value={kv.value} onChange={e=>setKv(s=>({...s, value:e.target.value}))} style={{flex:2}} />
+                <button onClick={async()=>{ await EventsEmit('save_config', { [kv.key]: kv.value }); setKv({key:'', value:''}); loadConfig() }}>保存</button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="db-msg-grid">
+            <div className="head">Session</div>
+            <div className="head">方向</div>
+            <div className="head">时间</div>
+            <div className="head">内容</div>
+            {msgs.map((m, idx) => (
+              <div key={idx + '_' + (m.id || '')} className="db-msg-row" style={{contents:'display'}}>
+                <div className="db-cell">{m.session_id || m.SessionID}</div>
+                <div className="db-cell">{m.direction || m.Direction}</div>
+                <div className="db-cell">{fmtTime(m.created_at || m.CreatedAt)}</div>
+                <div className="db-msg-payload">{m.payload || m.Payload}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 编辑弹窗 */}
+      {edit && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>编辑配置项</h3>
+              <button className="close" onClick={closeEdit}>✖</button>
+            </div>
+            <div className="modal-content">
+              <div style={{display:'flex', flexDirection:'column', gap:10}}>
+                <div>
+                  <label style={{display:'block', opacity:.8, fontSize:12, marginBottom:4}}>Key</label>
+                  <input value={edit.key} onChange={e=>setEdit(s=>({...s, key:e.target.value}))} />
+                </div>
+                <div>
+                  <label style={{display:'block', opacity:.8, fontSize:12, marginBottom:4}}>Value</label>
+                  <textarea rows={8} style={{width:'100%'}} value={edit.value} onChange={e=>setEdit(s=>({...s, value:e.target.value}))} />
+                </div>
+                <div style={{display:'flex', gap:8, justifyContent:'flex-end'}}>
+                  <button onClick={closeEdit}>取消</button>
+                  <button onClick={saveEdit}>保存</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // 简易“纯表情”识别：若整条文本仅包含 1 个表情图形（含变体），则视为表情
@@ -995,6 +1209,30 @@ function normalizeMQTTBroker(endpoint, preferTLS = true, portOverride) {
   const scheme = preferTLS ? 'ssl' : 'tcp'
   return `${scheme}://${hostPart}${finalPort ? ':' + finalPort : ''}`
 }
+
+// 布尔值容错转换（支持 true/false、'true'/'false'、1/0、'1'/'0'、'yes'/'no'、'on'/'off'）
+function toBool(v) {
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'number') return v !== 0
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    return s === 'true' || s === '1' || s === 'yes' || s === 'on'
+  }
+  return !!v
+}
+
+// 基础 HTML 转义（并将换行替换为 <br/> 以保留多行显示）
+function escapeHtml(input) {
+  const s = String(input ?? '')
+  const escaped = s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+  return escaped.replace(/\n/g, '<br/>')
+}
+
+export default App
 
 
 

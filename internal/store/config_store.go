@@ -23,3 +23,15 @@ func (d *DB) GetConfig(ctx context.Context) (map[string]string, error) {
 	for rows.Next() { var k, v string; if err := rows.Scan(&k, &v); err != nil { return nil, err }; m[k] = v }
 	return m, rows.Err()
 }
+
+// DeleteConfig 删除指定 key
+func (d *DB) DeleteConfig(ctx context.Context, key string) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM config WHERE key = ?`, key)
+	return err
+}
+
+// ClearConfig 清空所有配置
+func (d *DB) ClearConfig(ctx context.Context) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM config`)
+	return err
+}

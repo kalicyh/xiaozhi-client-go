@@ -567,3 +567,60 @@ body { background: #0e1621; }
   .modal-content { padding: 10px 12px; }
   .modal-content pre { font-size: 12px; line-height: 1.5; }
 }
+
+/* DB 管理页面基础样式 */
+.db-page h3 { font-size: 16px; opacity: .9 }
+.db-page h4 { font-size: 14px; opacity: .9 }
+.db-page input { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); color: #fff; padding: 6px 8px; border-radius: 6px }
+.db-page button { padding: 6px 10px; background: #2b5278; border: none; color: #fff; border-radius: 6px; cursor: pointer }
+.db-page button:hover { background: #346a9b }
+.db-page .grid { display: grid; grid-template-columns: 1fr 2fr 120px; gap: 8px }
+
+/* DB 管理页面：滚动与布局优化 */
+.db-page { 
+  flex: 1; 
+  min-height: 0; 
+  display: flex; 
+  flex-direction: column; 
+  background: #101922;
+}
+.db-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, rgba(15,26,36,.96), rgba(15,26,36,.9));
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.db-body { 
+  flex: 1; 
+  min-height: 0; 
+  overflow: auto; 
+  padding: 12px 16px;
+}
+.db-actions { margin-left: auto; display: flex; gap: 8px }
+.db-tabs button { opacity: .75 }
+.db-tabs button.active { opacity: 1 }
+
+/* DB 表格/网格增强 */
+.db-grid { display: grid; grid-template-columns: 1fr 2fr 120px; gap: 8px }
+.db-grid .head { font-weight: 700; color: #cfe2f3 }
+.db-cell { word-break: break-all; white-space: pre-wrap }
+.db-msg-grid { display: grid; grid-template-columns: 140px 80px 160px 1fr; gap: 8px }
+.db-msg-payload { white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto }
+
+/* 滚动条美化（DB主体与消息payload） */
+.db-body::-webkit-scrollbar, .db-msg-payload::-webkit-scrollbar { width: 8px; height: 8px }
+.db-body::-webkit-scrollbar-thumb, .db-msg-payload::-webkit-scrollbar-thumb { background: rgba(43,82,120,.6); border-radius: 4px }
+.db-body::-webkit-scrollbar-thumb:hover, .db-msg-payload::-webkit-scrollbar-thumb:hover { background: rgba(43,82,120,.8) }
+
+/* 小屏优化 */
+@media (max-width: 768px) {
+  .db-grid { grid-template-columns: 1fr 1.5fr 100px }
+  .db-msg-grid { grid-template-columns: 120px 70px 140px 1fr }
+}

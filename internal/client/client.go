@@ -294,6 +294,11 @@ func (c *Client) onMQTTMessage(ctx context.Context, text []byte) {
 	if err := json.Unmarshal(text, &resp); err == nil {
 		if resp.Type == "hello" && resp.Transport == "udp" && resp.UDP != nil {
 			c.SessionID = resp.SessionID
+			// 若已存在 UDP 连接，先关闭，避免泄漏
+			if c.udp != nil {
+				_ = c.udp.Close()
+				c.udp = nil
+			}
 			u := transport.NewUDPAudio(resp.UDP.Server, resp.UDP.Port, resp.UDP.KeyHex, resp.UDP.NonceHex, transport.UDPAudioHandlers{
 				OnAudioFrame: func(ctx context.Context, opus []byte) { if c.OnBinary != nil { c.OnBinary(ctx, opus) } },
 				OnError: func(ctx context.Context, err error) { if c.OnError != nil { c.OnError(ctx, err) } },
@@ -342,9 +347,22 @@ func (c *Client) SendAbort(ctx context.Context, reason string) error {
 	return errors.New("no transport")
 }
 
+// 新增：发送 Goodbye，遵循文档 3.3.1/3.3.2 关闭流程
+func (c *Client) SendGoodbye(ctx context.Context) error {
+	if c.SessionID == "" { return nil }
+	msg := map[string]any{"session_id": c.SessionID, "type": "goodbye"}
+	b, _ := json.Marshal(msg)
+	if c.ws != nil { return c.ws.SendText(ctx, b) }
+	if c.mqtt != nil { return c.mqtt.SendText(ctx, b) }
+	return errors.New("no transport")
+}
+
 func (c *Client) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// 按文档先发送 Goodbye（忽略发送错误）
+	_ = c.SendGoodbye(context.Background())
 
 	if c.udp != nil {
 		_ = c.udp.Close()

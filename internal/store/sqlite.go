@@ -56,3 +56,9 @@ func (d *DB) RecentMessages(ctx context.Context, limit int) ([]Message, error) {
 	}
 	return out, rows.Err()
 }
+
+// ClearMessages 清空 messages 表
+func (d *DB) ClearMessages(ctx context.Context) error {
+	_, err := d.db.ExecContext(ctx, `DELETE FROM messages`)
+	return err
+}

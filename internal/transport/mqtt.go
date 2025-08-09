@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -37,8 +38,13 @@ func (m *MQTTControl) Open(ctx context.Context, headers map[string]string) error
 	opts.SetAutoReconnect(true)
 	opts.SetConnectionLostHandler(func(_ mqtt.Client, err error) { if m.Handlers.OnError != nil { m.Handlers.OnError(context.Background(), err) }; if m.Handlers.OnClosed != nil { m.Handlers.OnClosed() } })
 	opts.SetOnConnectHandler(func(c mqtt.Client) {
-		if token := c.Subscribe(m.SubscribeTopic, 1, func(_ mqtt.Client, msg mqtt.Message) { if m.Handlers.OnText != nil { m.Handlers.OnText(context.Background(), msg.Payload()) } }); token.Wait() && token.Error() != nil {
-			if m.Handlers.OnError != nil { m.Handlers.OnError(context.Background(), token.Error()) }
+		// 仅当订阅主题有效时订阅
+		topic := strings.TrimSpace(m.SubscribeTopic)
+		lt := strings.ToLower(topic)
+		if topic != "" && lt != "null" {
+			if token := c.Subscribe(topic, 1, func(_ mqtt.Client, msg mqtt.Message) { if m.Handlers.OnText != nil { m.Handlers.OnText(context.Background(), msg.Payload()) } }); token.Wait() && token.Error() != nil {
+				if m.Handlers.OnError != nil { m.Handlers.OnError(context.Background(), token.Error()) }
+			}
 		}
 	})
 	m.client = mqtt.NewClient(opts)

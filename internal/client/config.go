@@ -107,14 +107,14 @@ func getDefaultMAC() string {
 
 func DefaultConfig() Config {
 	return Config{
-		ProtocolVersion: 1,
-		TokenMethod:     "header", // 默认使用 Authorization 头
-		Audio:           AudioParams{Format: "opus", SampleRate: 48000, Channels: 1, FrameDuration: 20},
+		ProtocolVersion: 3,                                  // 文档: version = 3
+		TokenMethod:     "header",
+		Audio:           AudioParams{Format: "opus", SampleRate: 16000, Channels: 1, FrameDuration: 60}, // 文档: 16k/60ms
 		HelloTimeout:    10 * time.Second,
 		MQTTPublishTopic:   "device-server",
-		MQTTSubscribeTopic: "null",
+		MQTTSubscribeTopic: "null", // 可由 OTA/设置覆盖；为 "null" 时不订阅
 		MQTTKeepAliveSec:   240,
-		// 默认设备ID：采用系统首选物理网卡 MAC（与参考实现一致）
+		// 默认设备ID：采用系统首选物理网卡 MAC
 		DeviceID:        getDefaultMAC(),
 	}
 }
