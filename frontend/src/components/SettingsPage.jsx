@@ -10,6 +10,24 @@ function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audi
   const [windowSize, setWindowSize] = useState(propWindowSize || { width: window.innerWidth, height: window.innerHeight })
   const volumeTimeoutRef = useRef(null) // 音量设置防抖
   
+  // 挂载时尝试读取系统 MAC（通过后端导出的方法），并写入 form.system_mac
+  useEffect(() => {
+    const fetchSystemMac = async () => {
+      try {
+        const fn = window?.go?.main?.App?.GetDefaultDeviceID
+        if (typeof fn === 'function') {
+          const mac = await fn()
+          if (mac && !form.system_mac) {
+            setForm(s => ({ ...s, system_mac: mac }))
+          }
+        }
+      } catch (_) { /* 忽略失败，仍允许手动输入 */ }
+    }
+    fetchSystemMac()
+    // 仅初始化时调用一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  
   // 检查系统音量支持
   useEffect(() => {
     const checkSystemVolumeSupport = async () => {
@@ -172,28 +190,55 @@ function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audi
             />
           </div>
 
+          {/* 使用OTA 与 启用Token 改为通用设置，两个协议都可使用 */}
+          <div className="row">
+            <label>使用OTA</label>
+            <input type="checkbox" checked={!!toBool(form.use_ota)} onChange={(e)=>set('use_ota', e.target.checked)} />
+          </div>
+          <div className="row">
+            <label>启用Token</label>
+            <input type="checkbox" checked={!!toBool(form.enable_token)} onChange={(e)=>set('enable_token', e.target.checked)} />
+          </div>
+
+          {/* 统一的设备ID设置（合并 Device-Id 与 DeviceID） */}
+          <div className="row">
+            <label>设备ID</label>
+            <div style={{ display:'flex', gap:8, alignItems:'center', flex:1 }}>
+              <input
+                type="checkbox"
+                checked={!!toBool(form.use_system_mac)}
+                onChange={(e)=> setForm(s => ({ ...s, use_system_mac: e.target.checked }))
+              }
+              />
+              <span>使用系统MAC</span>
+              {toBool(form.use_system_mac) ? (
+                <input
+                  value={form.system_mac || ''}
+                  readOnly
+                  placeholder="系统MAC读取中…"
+                  style={{flex:1}}
+                />
+              ) : (
+                <input
+                  value={form.device_id || ''}
+                  onChange={(e)=> set('device_id', e.target.value)}
+                  placeholder="例如 dc:da:0c:8f:d6:fc"
+                  style={{flex:1}}
+                />
+              )}
+            </div>
+          </div>
+
           {form.protocol === 'ws' ? (
             <>
-              <div className="row">
-                <label>使用OTA</label>
-                <input type="checkbox" checked={!!form.use_ota} onChange={(e)=>set('use_ota', e.target.checked)} />
-              </div>
-              <div className="row">
-                <label>启用Token</label>
-                <input type="checkbox" checked={!!form.enable_token} onChange={(e)=>set('enable_token', e.target.checked)} />
-              </div>
-              
               {/* 使用 OTA 时显示 OTA 参数 */}
-              {toBool(form.use_ota) && (
+              {toBool(form.use_ota) ? (
                 <>
                   <div className="row">
                     <label>OTA URL</label>
                     <input value={form.ota_url} onChange={e=>set('ota_url', e.target.value)} placeholder="https://api.tenclass.net/xiaozhi/ota/" style={{flex:1}} />
                   </div>
-                  <div className="row">
-                    <label>Device-Id</label>
-                    <input value={form.ota_device_id} onChange={e=>set('ota_device_id', e.target.value)} placeholder="58:8c:81:66:01:CC" style={{flex:1}} />
-                  </div>
+                  {/* 移除 OTA 内的 Device-Id 单独输入，统一在上方“设备ID”中设置 */}
                   <div className="row" style={{alignItems:'stretch'}}>
                     <label style={{alignSelf:'flex-start', marginTop:4}}>OTA POST内容</label>
                     <textarea
@@ -210,10 +255,8 @@ function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audi
                     />
                   </div>
                 </>
-              )}
-              
-              {/* 不使用 OTA 时显示手动 WS URL */}
-              {!toBool(form.use_ota) && (
+              ) : (
+                // 不使用 OTA 时显示手动 WS URL
                 <div className="row">
                   <label>WS URL</label>
                   <input value={form.ws} onChange={e=>set('ws', e.target.value)} placeholder="wss://host/ws" style={{flex:1}} />
@@ -222,32 +265,58 @@ function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audi
             </>
           ) : (
             <>
-              <div className="row">
-                <label>Broker</label>
-                <input value={form.broker} onChange={e=>set('broker', e.target.value)} placeholder="tcp://127.0.0.1:1883" style={{flex:1}} />
-              </div>
-              <div className="row">
-                <label>Pub</label>
-                <input value={form.pub} onChange={e=>set('pub', e.target.value)} placeholder="devices/+/tx" style={{flex:1}} />
-              </div>
-              <div className="row">
-                <label>Sub</label>
-                <input value={form.sub} onChange={e=>set('sub', e.target.value)} placeholder="devices/+/rx" style={{flex:1}} />
-              </div>
-              <div className="row">
-                <label>User</label>
-                <input value={form.username} onChange={e=>set('username', e.target.value)} style={{flex:1}} />
-                <label style={{marginLeft:8}}>Pass</label>
-                <input value={form.password} onChange={e=>set('password', e.target.value)} style={{flex:1}} />
-              </div>
+              {/* MQTT 分支：使用 OTA 时同样显示 OTA 参数；否则展示手动 MQTT 参数 */}
+              {toBool(form.use_ota) ? (
+                <>
+                  <div className="row">
+                    <label>OTA URL</label>
+                    <input value={form.ota_url} onChange={e=>set('ota_url', e.target.value)} placeholder="https://api.tenclass.net/xiaozhi/ota/" style={{flex:1}} />
+                  </div>
+                  {/* 移除 OTA 内的 Device-Id 单独输入，统一在上方“设备ID”中设置 */}
+                  <div className="row" style={{alignItems:'stretch'}}>
+                    <label style={{alignSelf:'flex-start', marginTop:4}}>OTA POST内容</label>
+                    <textarea
+                      value={form.ota_body}
+                      onChange={e=>set('ota_body', e.target.value)}
+                      rows={12}
+                      style={{
+                        flex:1, 
+                        fontFamily:'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+                        resize: 'vertical',
+                        minHeight: '200px'
+                      }}
+                      placeholder="粘贴/编辑将作为 POST Body 发送的 JSON"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="row">
+                    <label>Broker</label>
+                    <input value={form.broker} onChange={e=>set('broker', e.target.value)} placeholder="tcp://127.0.0.1:1883" style={{flex:1}} />
+                  </div>
+                  <div className="row">
+                    <label>Pub</label>
+                    <input value={form.pub} onChange={e=>set('pub', e.target.value)} placeholder="devices/+/tx" style={{flex:1}} />
+                  </div>
+                  <div className="row">
+                    <label>Sub</label>
+                    <input value={form.sub} onChange={e=>set('sub', e.target.value)} placeholder="devices/+/rx" style={{flex:1}} />
+                  </div>
+                  <div className="row">
+                    <label>User</label>
+                    <input value={form.username} onChange={e=>set('username', e.target.value)} style={{flex:1}} />
+                    <label style={{marginLeft:8}}>Pass</label>
+                    <input value={form.password} onChange={e=>set('password', e.target.value)} style={{flex:1}} />
+                  </div>
+                </>
+              )}
             </>
           )}
 
           <div className="row">
             <label>ClientID</label>
             <input value={form.client_id} onChange={e=>set('client_id', e.target.value)} style={{flex:1}} />
-            <label style={{marginLeft:8}}>DeviceID</label>
-            <input value={form.device_id} onChange={e=>set('device_id', e.target.value)} style={{flex:1}} />
           </div>
 
           <div className="row">

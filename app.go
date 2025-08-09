@@ -146,7 +146,8 @@ func (a *App) startup(ctx context.Context) {
 			cfg.MQTTPublishTopic = getStr(kv, "pub")
 			cfg.MQTTSubscribeTopic = getStr(kv, "sub")
 			cfg.ClientID = getStr(kv, "client_id")
-			cfg.DeviceID = getStr(kv, "device_id")
+			// 仅在传入非空时覆盖默认 DeviceID
+			if v := getStr(kv, "device_id"); v != "" { cfg.DeviceID = v }
 			cfg.AuthToken = getStr(kv, "token")
 			cfg.MQTTKeepAliveSec = 240
 			c := client.New(cfg)
@@ -202,7 +203,8 @@ func (a *App) startup(ctx context.Context) {
 			}
 			cfg.WebsocketURL = wsURL
 			cfg.ClientID = getStr(kv, "client_id")
-			cfg.DeviceID = getStr(kv, "device_id")
+			// 仅在传入非空时覆盖默认 DeviceID
+			if v := getStr(kv, "device_id"); v != "" { cfg.DeviceID = v }
 			// Token 与开关
 			if tok := getStr(kv, "token"); tok != "" { cfg.AuthToken = tok }
 			if en, ok := kv["enable_token"]; ok {
@@ -278,7 +280,8 @@ func (a *App) startup(ctx context.Context) {
 				cfg.MQTTPublishTopic = getStr(kv, "pub")
 				cfg.MQTTSubscribeTopic = getStr(kv, "sub")
 				cfg.ClientID = getStr(kv, "client_id")
-				cfg.DeviceID = getStr(kv, "device_id")
+				// 仅在传入非空时覆盖默认 DeviceID
+				if v := getStr(kv, "device_id"); v != "" { cfg.DeviceID = v }
 				if tok := getStr(kv, "token"); tok != "" { cfg.AuthToken = tok }
 				a.client = client.New(cfg)
 				a.client.OnJSON = func(ctx context.Context, msg map[string]any) {
@@ -569,4 +572,11 @@ func (a *App) IsSystemVolumeSupported() bool {
 		return false
 	}
 	return a.volumeController.IsVolumeSupported()
+}
+
+// GetDefaultDeviceID 返回后端推断的默认设备ID（系统首选物理网卡 MAC）
+func (a *App) GetDefaultDeviceID() string {
+	// 直接利用 client.DefaultConfig() 中的默认逻辑
+	cfg := client.DefaultConfig()
+	return cfg.DeviceID
 }

@@ -1,6 +1,10 @@
 package client
 
-import "time"
+import (
+	"net"
+	"strings"
+	"time"
+)
 
 type AudioParams struct {
 	Format        string `json:"format"`
@@ -53,14 +57,64 @@ type Config struct {
 	MQTTKeepAliveSec   int
 }
 
+// isVirtualName 粗略判断虚拟/非物理网卡名称（跨平台常见关键字）
+func isVirtualName(name string) bool {
+	n := strings.ToLower(name)
+	for _, kw := range []string{
+		"virtual", "vmware", "hyper-v", "vethernet", "vbox", "docker", "br-", "loopback", "npcap", "tailscale", "utun", "tap", "tun",
+	} {
+		if strings.Contains(n, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// getDefaultMAC 尝试获取默认出站网卡的 MAC，失败则回退到首个可用物理网卡
+func getDefaultMAC() string {
+	// 1) 通过到公网 UDP 拨号推断默认出站 IP
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err == nil {
+		if ua, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+			localIP := ua.IP
+			_ = conn.Close()
+			ifs, _ := net.Interfaces()
+			for _, inf := range ifs {
+				if inf.Flags&net.FlagUp == 0 || inf.Flags&net.FlagLoopback != 0 { continue }
+				if isVirtualName(inf.Name) || len(inf.HardwareAddr) == 0 { continue }
+				addrs, _ := inf.Addrs()
+				for _, a := range addrs {
+					if ipNet, ok := a.(*net.IPNet); ok && ipNet.IP != nil {
+						if ipNet.IP.Equal(localIP) {
+							return strings.ToLower(inf.HardwareAddr.String())
+						}
+					}
+				}
+			}
+		} else {
+			_ = conn.Close()
+		}
+	}
+	// 2) 回退：挑选首个 Up 且非回环、非虚拟、带 MAC 的网卡
+	ifs, _ := net.Interfaces()
+	for _, inf := range ifs {
+		if inf.Flags&net.FlagUp == 0 || inf.Flags&net.FlagLoopback != 0 { continue }
+		if isVirtualName(inf.Name) || len(inf.HardwareAddr) == 0 { continue }
+		return strings.ToLower(inf.HardwareAddr.String())
+	}
+	return ""
+}
+
 func DefaultConfig() Config {
 	return Config{
 		ProtocolVersion: 1,
 		TokenMethod:     "header", // 默认使用 Authorization 头
-		Audio: AudioParams{Format: "opus", SampleRate: 48000, Channels: 1, FrameDuration: 20},
+		Audio:           AudioParams{Format: "opus", SampleRate: 48000, Channels: 1, FrameDuration: 20},
 		HelloTimeout:    10 * time.Second,
-		MQTTPublishTopic:   "devices/+/tx",
-		MQTTSubscribeTopic: "devices/+/rx",
+		MQTTPublishTopic:   "device-server",
+		MQTTSubscribeTopic: "null",
 		MQTTKeepAliveSec:   240,
+		// 默认设备ID：采用系统首选物理网卡 MAC（与参考实现一致）
+		DeviceID:        getDefaultMAC(),
 	}
 }

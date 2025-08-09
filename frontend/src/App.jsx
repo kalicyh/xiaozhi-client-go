@@ -118,8 +118,10 @@ function App() {
     enable_token: true,
     // 新增：控制系统提示气泡显隐
     show_system_bubbles: true,
+    // 统一设备ID：默认使用系统 MAC
+    use_system_mac: true,
+    system_mac: '',
     ota_url: 'https://api.tenclass.net/xiaozhi/ota/',
-    ota_device_id: '58:8c:81:66:01:CC',
     ota_body: JSON.stringify({
       version: 2,
       flash_size: 16777216,
@@ -616,6 +618,8 @@ function App() {
           enable_token: toBool(obj?.enable_token ?? f.enable_token),
           // 新增：恢复系统气泡显隐
           show_system_bubbles: toBool(obj?.show_system_bubbles ?? f.show_system_bubbles),
+          // 新增：恢复是否使用系统 MAC
+          use_system_mac: toBool(obj?.use_system_mac ?? f.use_system_mac),
         }))
       } catch {
         // ignore
@@ -684,7 +688,7 @@ function App() {
     setRecording(true)
     setPttTime(0)
     clearInterval(timerRef.current)
-    timerRef.current = setInterval(()=> setPttTime(t=>t+0.1), 100)
+    timerRef.current = setInterval(()=>setPttTime(t=>t+0.1), 100)
     EEmit('start_listen')
   }
 
@@ -696,6 +700,9 @@ function App() {
 
   const handleConnect = async (f) => {
     setConnecting(true)
+    // 统一设备ID：优先使用系统 MAC
+    const effectiveDeviceId = toBool(f.use_system_mac) ? (f.system_mac || '') : (f.device_id || '')
+
     if (f.protocol === 'ws') {
       let resolved = { ...f }
       if (toBool(f.use_ota)) {
@@ -706,15 +713,28 @@ function App() {
               throw new Error('OTA POST内容不是有效的 JSON')
             }
           }
-          const headers = { 'Content-Type': 'application/json', 'Accept': '*/*' }
-          if (f.ota_device_id) headers['Device-Id'] = f.ota_device_id
+          const headers = {
+            'Content-Type': 'application/json',
+            'Accept': '*/*',
+            'User-Agent': 'xiaozhi-client-go/desktop',
+            'Activation-Version': '2',
+          }
+          if (effectiveDeviceId) headers['Device-Id'] = effectiveDeviceId
+          if (f.client_id) headers['Client-Id'] = f.client_id
           const res = await fetch(f.ota_url, {
             method: 'POST',
             headers,
             body: JSON.stringify(bodyObj),
             cache: 'no-store'
           })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          // 改进：当返回非 2xx 时读取响应文本，便于诊断
+          if (!res.ok) {
+            let errText = ''
+            try { errText = await res.text() } catch { /* ignore */ }
+            const err = new Error(`HTTP ${res.status}${errText ? ' · ' + errText.slice(0, 512) : ''}`)
+            err._detail = errText
+            throw err
+          }
           const data = await res.json()
           const wsUrl = data?.websocket?.url
           if (!wsUrl) throw new Error('OTA 响应缺少 websocket.url')
@@ -725,15 +745,113 @@ function App() {
         } catch (e) {
           setConnecting(false)
           setCurrentPage('settings')
-          appendMsg('bot', `OTA 获取失败：${escapeHtml(String(e))}`)
+          // 使用 system 气泡并附带可点击的详细信息
+          const msg = `OTA 获取失败：${escapeHtml(e?.message || String(e))}`
+          const detail = e?._detail || e?.stack || String(e)
+          appendMsg('system', msg, detail)
           return
         }
       }
+      // 确保保存与连接时携带统一设备ID
+      resolved.device_id = effectiveDeviceId
       EventsEmit('connect_ws', { url: resolved.ws, client_id: resolved.client_id, device_id: resolved.device_id, token: resolved.token, enable_token: toBool(resolved.enable_token) })
       EventsEmit('save_config', resolved)
     } else {
-      EventsEmit('connect_mqtt', { broker: f.broker, username: f.username, password: f.password, pub: f.pub, sub: f.sub, client_id: f.client_id, device_id: f.device_id, token: f.token })
-      EventsEmit('save_config', f)
+      // MQTT 分支：也支持 OTA 下发
+      let resolved = { ...f }
+      if (toBool(f.use_ota)) {
+        try {
+          let bodyObj = {}
+          if (f.ota_body && String(f.ota_body).trim()) {
+            try { bodyObj = JSON.parse(f.ota_body) } catch (e) {
+              throw new Error('OTA POST内容不是有效的 JSON')
+            }
+          }
+          const headers = {
+            'Content-Type': 'application/json',
+            'Accept': '*/*',
+            'User-Agent': 'xiaozhi-client-go/desktop',
+            'Activation-Version': '2',
+          }
+          if (effectiveDeviceId) headers['Device-Id'] = effectiveDeviceId
+          if (f.client_id) headers['Client-Id'] = f.client_id
+          const res = await fetch(f.ota_url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(bodyObj),
+            cache: 'no-store'
+          })
+          // 改进：当返回非 2xx 时读取响应文本，便于诊断
+          if (!res.ok) {
+            let errText = ''
+            try { errText = await res.text() } catch { /* ignore */ }
+            const err = new Error(`HTTP ${res.status}${errText ? ' · ' + errText.slice(0, 512) : ''}`)
+            err._detail = errText
+            throw err
+          }
+          const data = await res.json()
+          const mq = data?.mqtt || data?.MQTT
+          if (!mq) throw new Error('OTA 响应缺少 mqtt 字段')
+
+          // 映射字段（兼容 py-xiaozhi）
+          const endpointRaw = mq.endpoint || mq.broker || mq.url || ''
+          const port = mq.port ?? mq.mqtt_port
+          const endpoint = normalizeMQTTBroker(endpointRaw, true, port) // 默认优先 TLS 8883，并覆盖端口
+          const pub = mq.publish_topic || mq.pub || ''
+          let sub = mq.subscribe_topic || mq.sub || ''
+          const qos = mq.qos ?? resolved.qos
+          const keep_alive = mq.keep_alive ?? mq.keepalive ?? resolved.keep_alive
+          // 兼容字符串 "null"
+          if (String(sub).toLowerCase() === 'null') sub = ''
+
+          resolved = {
+            ...resolved,
+            broker: endpoint || resolved.broker,
+            username: mq.username ?? resolved.username,
+            password: mq.password ?? resolved.password,
+            pub: pub || resolved.pub,
+            sub: sub || resolved.sub,
+            client_id: mq.client_id || resolved.client_id,
+            // 如 OTA 也携带 token，可复用
+            token: mq.token || resolved.token,
+            // 额外持久化字段
+            port: port ?? resolved.port,
+            qos,
+            keep_alive,
+          }
+        } catch (e) {
+          setConnecting(false)
+          setCurrentPage('settings')
+          // 使用 system 气泡并附带可点击的详细信息
+          const msg = `OTA 获取失败：${escapeHtml(e?.message || String(e))}`
+          const detail = e?._detail || e?.stack || String(e)
+          appendMsg('system', msg, detail)
+          return
+        }
+      }
+
+      // 在连接前提示将要连接的 MQTT 参数，便于排查
+      try {
+        appendMsg(
+          'system',
+          `即将连接 MQTT · ${escapeHtml(String(resolved.broker || ''))} · pub: ${escapeHtml(String(resolved.pub || ''))} · sub: ${escapeHtml(String(resolved.sub || ''))}`,
+          JSON.stringify({ broker: resolved.broker, pub: resolved.pub, sub: resolved.sub, client_id: resolved.client_id, username: resolved.username, qos: resolved.qos, keep_alive: resolved.keep_alive }, null, 2)
+        )
+      } catch {}
+
+      // 确保保存与连接时携带统一设备ID
+      resolved.device_id = effectiveDeviceId
+      EventsEmit('connect_mqtt', {
+        broker: resolved.broker,
+        username: resolved.username,
+        password: resolved.password,
+        pub: resolved.pub,
+        sub: resolved.sub,
+        client_id: resolved.client_id,
+        device_id: resolved.device_id,
+        token: resolved.token,
+      })
+      EventsEmit('save_config', resolved)
     }
     setCurrentPage('chat')
   }
@@ -832,6 +950,50 @@ function isEmojiOnly(s) {
     if (/^\p{Extended_Pictographic}(\uFE0F|\uFE0E)?$/u.test(s)) return true
   } catch (_) { /* 属性不支持时走回退 */ }
   return /^[\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{2600}-\u{27BF}]\uFE0F?$/u.test(s)
+}
+
+// 规范化 MQTT Broker 地址：补齐协议与端口（支持端口覆盖与 IPv6）
+function normalizeMQTTBroker(endpoint, preferTLS = true, portOverride) {
+  if (!endpoint) return ''
+  const e = String(endpoint).trim()
+  // 已包含协议的，直接返回；如提供端口覆盖且 URL 未含端口，尝试补充
+  if (/^(tcp|ssl|ws|wss|mqtt|mqtts):\/\//i.test(e)) {
+    if (portOverride) {
+      try {
+        const u = new URL(e)
+        if (!u.port) { u.port = String(portOverride) }
+        return u.toString()
+      } catch { return e }
+    }
+    return e
+  }
+  const defaultPort = preferTLS ? '8883' : '1883'
+  let hostPart = e
+  let portPart = ''
+
+  // IPv6 带方括号
+  if (e.startsWith('[')) {
+    const idx = e.indexOf(']')
+    if (idx !== -1) {
+      const rest = e.slice(idx + 1)
+      hostPart = e.slice(0, idx + 1) // 保留方括号
+      if (rest.startsWith(':')) portPart = rest.slice(1)
+    }
+  } else if (e.includes(':')) {
+    const colonCount = (e.match(/:/g) || []).length
+    if (colonCount === 1) {
+      const [h, p] = e.split(':')
+      hostPart = h.trim()
+      portPart = (p || '').trim()
+    } else {
+      // 视为不带方括号的 IPv6 主机
+      hostPart = `[${e}]`
+    }
+  }
+
+  const finalPort = String(portOverride || portPart || defaultPort)
+  const scheme = preferTLS ? 'ssl' : 'tcp'
+  return `${scheme}://${hostPart}${finalPort ? ':' + finalPort : ''}`
 }
 
 
