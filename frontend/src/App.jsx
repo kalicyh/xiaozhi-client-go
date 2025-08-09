@@ -3,31 +3,14 @@ import './App.css'
 import { EventsOn, EventsEmit } from '../wailsjs/runtime/runtime'
 import { GetSystemVolume, SetSystemVolume, IsSystemVolumeSupported } from '../wailsjs/go/main/App'
 import AudioPlayer from './audio/AudioPlayer.js'
+import SettingsPage from './components/SettingsPage.jsx'
+import CustomTitleBar from './components/CustomTitleBar.jsx'
+import './components/SettingsPage.css'
 
 // 安全包装：在浏览器直开或未通过 Wails 运行时，window.runtime 可能不存在
 const RT = typeof window !== 'undefined' && window.runtime
 const EOn = RT ? EventsOn : (event, cb) => { console.warn('[Mock] EventsOn', event); return () => {} }
 const EEmit = RT ? EventsEmit : (...args) => { console.warn('[Mock] EventsEmit', args) }
-
-function ChatHeader({ onToggleSettings, subtitle, isPlayingAudio, audioStats }) {
-  return (
-    <div className="chat-header">
-      <div className="title">小智</div>
-      <div className={`subtitle ${subtitle.includes('离线') ? 'offline' : 'online'}`}>
-        {subtitle}
-        {isPlayingAudio && audioStats && (
-          <span className="audio-indicator">
-            🔊 {audioStats.packetsReceived} 包 
-            {audioStats.smoothRate && ` | 平滑: ${audioStats.smoothRate}`}
-            {audioStats.quality && ` | 音质: ${audioStats.quality}`}
-          </span>
-        )}
-      </div>
-      <div className="spacer" />
-      <button className="icon-btn" title="连接设置" onClick={onToggleSettings}>⚙️</button>
-    </div>
-  )
-}
 
 function Message({ role, text, time }) {
   if (role === 'system') {
@@ -54,13 +37,40 @@ function Message({ role, text, time }) {
 
 function InputBar({ onSend, onPTTStart, onPTTStop, recording, pttTime }) {
   const [val, setVal] = useState('')
+  const taRef = useRef(null)
+  const composingRef = useRef(false)
+
+  const autosize = () => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px' // 限制最大高度，避免撑太高
+  }
+
   const send = () => {
     const v = val.trim()
     if (!v) return
     onSend(v)
     setVal('')
+    // 发送后保持焦点并复位高度
+    if (taRef.current) {
+      taRef.current.focus()
+      taRef.current.style.height = 'auto'
+      taRef.current.style.height = ''
+    }
   }
-  const handleKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }
+
+  const handleKey = (e) => {
+    // 避免中文输入法组合状态下回车误发送
+    if (e.isComposing || composingRef.current) return
+    if (e.key === 'Enter' && !e.shiftKey) { 
+      e.preventDefault(); 
+      send() 
+    }
+  }
+
+  useEffect(() => { autosize() }, [val])
+
   return (
     <div className="input-bar">
       <button
@@ -76,219 +86,17 @@ function InputBar({ onSend, onPTTStart, onPTTStop, recording, pttTime }) {
       </button>
       {recording && <div className="ptt-timer">{pttTime.toFixed(1)}s</div>}
       <textarea
+        ref={taRef}
         className="text-input"
         rows={1}
         placeholder="输入消息…"
         value={val}
-        onChange={(e)=>setVal(e.target.value)}
+        onChange={(e)=> setVal(e.target.value)}
         onKeyDown={handleKey}
+        onCompositionStart={()=> (composingRef.current = true)}
+        onCompositionEnd={()=> (composingRef.current = false)}
       />
       <button className="send" onClick={send} title="发送">➤</button>
-    </div>
-  )
-}
-
-function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connecting, audioPlayer, isPlayingAudio }) {
-  const [volume, setVolume] = useState(100) // 添加音量状态
-  const [systemVolumeSupported, setSystemVolumeSupported] = useState(false)
-  const [useSystemVolume, setUseSystemVolume] = useState(true) // 是否使用系统音量
-  const volumeTimeoutRef = useRef(null) // 音量设置防抖
-  
-  // 检查系统音量支持
-  useEffect(() => {
-    const checkSystemVolumeSupport = async () => {
-      try {
-        const supported = await IsSystemVolumeSupported()
-        setSystemVolumeSupported(supported)
-        console.log('系统音量控制支持:', supported)
-      } catch (error) {
-        console.warn('检查系统音量支持失败:', error)
-        setSystemVolumeSupported(false)
-      }
-    }
-    checkSystemVolumeSupport()
-  }, [])
-  
-  // 初始化音量
-  useEffect(() => {
-    const initVolume = async () => {
-      if (useSystemVolume && systemVolumeSupported) {
-        try {
-          const systemVol = await GetSystemVolume()
-          setVolume(Math.round(systemVol * 100))
-          console.log('当前系统音量:', Math.round(systemVol * 100) + '%')
-        } catch (error) {
-          console.warn('获取系统音量失败:', error)
-          setVolume(50)
-        }
-      } else if (audioPlayer) {
-        const currentVolume = audioPlayer.getVolume()
-        if (typeof currentVolume === 'number') {
-          setVolume(Math.round(currentVolume * 100))
-        }
-      }
-    }
-    initVolume()
-    
-    // 清理函数：清除定时器
-    return () => {
-      if (volumeTimeoutRef.current) {
-        clearTimeout(volumeTimeoutRef.current)
-      }
-    }
-  }, [audioPlayer, useSystemVolume, systemVolumeSupported])
-  
-  if (!open) return null
-  const set = (k, v) => setForm(s => ({ ...s, [k]: v }))
-  
-  const handleVolumeChange = async (newVolume) => {
-    const volumeValue = parseInt(newVolume)
-    setVolume(volumeValue) // 立即更新UI
-    
-    // 清除之前的定时器（如果有）
-    if (volumeTimeoutRef.current) {
-      clearTimeout(volumeTimeoutRef.current)
-    }
-    
-    // 立即设置音量，实现实时跟随
-    if (useSystemVolume && systemVolumeSupported) {
-      try {
-        await SetSystemVolume(volumeValue / 100)
-        console.log('系统音量实时设置为:', volumeValue + '%')
-      } catch (error) {
-        console.error('设置系统音量失败:', error)
-      }
-    }
-    
-    if (audioPlayer) {
-      audioPlayer.setVolume(volumeValue / 100)
-    }
-  }
-  return (
-    <div className="settings">
-      <div className="row">
-        <label>协议</label>
-        <select value={form.protocol} onChange={e=>set('protocol', e.target.value)}>
-          <option value="mqtt">MQTT + UDP</option>
-          <option value="ws">WebSocket</option>
-        </select>
-        <div className="spacer" />
-        <button onClick={()=>onConnect(form)} className="primary" disabled={connecting}>{connecting ? '连接中…' : '连接'}</button>
-        <button onClick={onDisconnect} className="danger" style={{marginLeft:8}} disabled={connecting}>断开</button>
-      </div>
-      {form.protocol === 'ws' ? (
-        <>
-          <div className="row">
-            <label>使用OTA</label>
-            <input type="checkbox" checked={!!form.use_ota} onChange={(e)=>set('use_ota', e.target.checked)} />
-          </div>
-          <div className="row">
-            <label>启用Token</label>
-            <input type="checkbox" checked={!!form.enable_token} onChange={(e)=>set('enable_token', e.target.checked)} />
-          </div>
-          {/* 使用 OTA 时显示 OTA 参数 */}
-          {toBool(form.use_ota) && (
-            <>
-              <div className="row">
-                <label>OTA URL</label>
-                <input value={form.ota_url} onChange={e=>set('ota_url', e.target.value)} placeholder="https://api.tenclass.net/xiaozhi/ota/" style={{flex:1}} />
-              </div>
-              <div className="row">
-                <label>Device-Id</label>
-                <input value={form.ota_device_id} onChange={e=>set('ota_device_id', e.target.value)} placeholder="58:8c:81:66:01:CC" style={{flex:1}} />
-              </div>
-              <div className="row" style={{alignItems:'stretch'}}>
-                <label style={{alignSelf:'flex-start', marginTop:4}}>OTA POST内容</label>
-                <textarea
-                  value={form.ota_body}
-                  onChange={e=>set('ota_body', e.target.value)}
-                  rows={12}
-                  style={{flex:1, fontFamily:'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'}}
-                  placeholder="粘贴/编辑将作为 POST Body 发送的 JSON"
-                />
-              </div>
-            </>
-          )}
-          {/* 不使用 OTA 时显示手动 WS URL */}
-          {!toBool(form.use_ota) && (
-            <div className="row"><label>WS URL</label><input value={form.ws} onChange={e=>set('ws', e.target.value)} placeholder="wss://host/ws" /></div>
-          )}
-        </>
-      ) : (
-        <>
-          <div className="row"><label>Broker</label><input value={form.broker} onChange={e=>set('broker', e.target.value)} placeholder="tcp://127.0.0.1:1883" /></div>
-          <div className="row"><label>Pub</label><input value={form.pub} onChange={e=>set('pub', e.target.value)} placeholder="devices/+/tx" /></div>
-          <div className="row"><label>Sub</label><input value={form.sub} onChange={e=>set('sub', e.target.value)} placeholder="devices/+/rx" /></div>
-          <div className="row">
-            <label>User</label><input value={form.username} onChange={e=>set('username', e.target.value)} />
-            <label style={{marginLeft:8}}>Pass</label><input value={form.password} onChange={e=>set('password', e.target.value)} />
-          </div>
-        </>
-      )}
-      <div className="row">
-        <label>ClientID</label><input value={form.client_id} onChange={e=>set('client_id', e.target.value)} />
-        <label style={{marginLeft:8}}>DeviceID</label><input value={form.device_id} onChange={e=>set('device_id', e.target.value)} />
-      </div>
-      <div className="row"><label>Token</label><input value={form.token} onChange={e=>set('token', e.target.value)} disabled={!toBool(form.enable_token)} /></div>
-      {toBool(form.enable_token) && (
-        <div className="row">
-          <label>Token方式</label>
-          <select value={form.token_method || 'header'} onChange={e=>set('token_method', e.target.value)}>
-            <option value="header">Header Authorization</option>
-            <option value="query_access_token">Query参数 access_token</option>
-            <option value="query_token">Query参数 token</option>
-          </select>
-        </div>
-      )}
-      
-
-      
-      {audioPlayer && (
-        <>
-          {systemVolumeSupported && (
-            <div className="row">
-              <label>音量控制</label>
-              <select 
-                value={useSystemVolume ? 'system' : 'app'} 
-                onChange={(e) => setUseSystemVolume(e.target.value === 'system')}
-                style={{flex: 1}}
-              >
-                <option value="system">系统音量</option>
-                <option value="app">应用音量</option>
-              </select>
-            </div>
-          )}
-          <div className="row">
-            <label>{systemVolumeSupported && useSystemVolume ? '系统音量' : '应用音量'}</label>
-            <input 
-              type="range" 
-              min="0" 
-              max="100" 
-              value={volume}
-              onChange={(e) => handleVolumeChange(e.target.value)}
-              style={{
-                flex: 1, 
-                marginRight: '8px',
-                WebkitAppearance: 'none',
-                appearance: 'none',
-                height: '6px',
-                borderRadius: '3px',
-                background: `linear-gradient(to right, #007acc 0%, #007acc ${volume}%, #ddd ${volume}%, #ddd 100%)`,
-                outline: 'none'
-              }}
-            />
-            <span style={{
-              fontSize: '12px', 
-              color: volume > 80 ? '#ff6b6b' : volume > 50 ? '#ffa726' : '#4caf50', 
-              fontWeight: 'bold',
-              minWidth: '35px',
-              textAlign: 'right'
-            }}>
-              {volume}%
-            </span>
-          </div>
-        </>
-      )}
     </div>
   )
 }
@@ -296,7 +104,8 @@ function SettingsPanel({ open, form, setForm, onConnect, onDisconnect, connectin
 function App() {
   const [messages, setMessages] = useState([])
   const [recording, setRecording] = useState(false)
-  const [showSettings, setShowSettings] = useState(true)
+  const [currentPage, setCurrentPage] = useState('chat') // 'chat' 或 'settings'
+  const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight })
   const [form, setForm] = useState(() => ({
     protocol: 'ws',
     ws: 'ws://127.0.0.1:8000',
@@ -349,9 +158,12 @@ function App() {
     smoothRate: null,
     quality: 'good'
   })
+  const [connected, setConnected] = useState(false) // 新增：连接状态布尔
   const listRef = useRef(null)
   const timerRef = useRef(null)
   const audioPlayerRef = useRef(null) // 音频播放器引用
+  const hasPlayedAudioRef = useRef(false) // 标记是否有过音频播放
+  const pendingMessagesRef = useRef([]) // 新增：待发送消息队列
 
   // 初始化音频播放器
   useEffect(() => {
@@ -363,6 +175,7 @@ function App() {
     // 设置音频播放器回调
     audioPlayerRef.current.onStartPlay = () => {
       setIsPlayingAudio(true)
+      hasPlayedAudioRef.current = true // 标记已有音频播放
       console.log('开始播放音频')
       
       // 只在开始新的播放会话时显示消息
@@ -380,7 +193,8 @@ function App() {
       // 延迟显示停止消息，避免短暂停顿时的重复消息
       clearTimeout(window.stopPlayTimeout)
       window.stopPlayTimeout = setTimeout(() => {
-        if (!audioPlayerRef.current?.isPlaying) {
+        // 只有在真正播放过音频且确认停止时才显示消息
+        if (!audioPlayerRef.current?.isPlaying && hasPlayedAudioRef.current) {
           appendMsg('system', '🔇 语音播放完成')
           // 重置音频统计
           setAudioStats({ packetsReceived: 0, lastPacketTime: 0 })
@@ -402,9 +216,67 @@ function App() {
 
     // 清理函数
     return () => {
+      // 清理定时器
+      if (window.stopPlayTimeout) {
+        clearTimeout(window.stopPlayTimeout)
+      }
+      // 重置音频播放标志
+      hasPlayedAudioRef.current = false
+      
       if (audioPlayerRef.current) {
         audioPlayerRef.current.destroy()
       }
+    }
+  }, [])
+
+  // 窗口大小变化监听
+  useEffect(() => {
+    const handleResize = () => {
+      const newSize = { width: window.innerWidth, height: window.innerHeight }
+      setWindowSize(newSize)
+      
+      // 根据窗口大小动态调整聊天窗口类名
+      const chatElement = document.querySelector('.chat')
+      if (chatElement) {
+        // 移除所有尺寸相关的类
+        chatElement.classList.remove('fullscreen', 'maximized', 'large', 'small', 'compact')
+        
+        // 根据窗口大小添加适当的类
+        if (newSize.width >= 1600 && newSize.height >= 900) {
+          chatElement.classList.add('large')
+        } else if (newSize.width <= 768 || newSize.height <= 600) {
+          chatElement.classList.add('compact')
+        } else if (newSize.width >= 1200 && newSize.height >= 800) {
+          chatElement.classList.add('medium-large')
+        }
+        
+        // 全屏检测
+        if (newSize.width === screen.width && newSize.height === screen.height) {
+          chatElement.classList.add('fullscreen')
+        }
+      }
+      
+      console.log('窗口大小变化:', newSize)
+    }
+    
+    // 初始设置
+    handleResize()
+    
+    // 监听窗口大小变化
+    window.addEventListener('resize', handleResize)
+    
+    // 监听全屏状态变化
+    document.addEventListener('fullscreenchange', handleResize)
+    document.addEventListener('webkitfullscreenchange', handleResize)
+    document.addEventListener('mozfullscreenchange', handleResize)
+    document.addEventListener('MSFullscreenChange', handleResize)
+    
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      document.removeEventListener('fullscreenchange', handleResize)
+      document.removeEventListener('webkitfullscreenchange', handleResize)
+      document.removeEventListener('mozfullscreenchange', handleResize)
+      document.removeEventListener('MSFullscreenChange', handleResize)
     }
   }, [])
 
@@ -537,19 +409,30 @@ function App() {
       const proto = (info && info.protocol) || form.protocol
       setSubtitle(`在线 · ${proto === 'ws' ? 'WebSocket' : 'MQTT'}`)
       appendMsg('bot', `已连接（${proto}）`)
+      setConnected(true)
+      // 发送排队消息
+      const queued = pendingMessagesRef.current || []
+      if (queued.length) {
+        pendingMessagesRef.current = []
+        appendMsg('system', `已发送待发消息 ${queued.length} 条`)
+        queued.forEach(m => EEmit('send_text', m))
+      }
       // ...不在此处保存配置，改为在发起连接时保存（包含解析后的地址）
     })
     const offDisconnected = EOn('disconnected', () => {
       setSubtitle('离线')
       appendMsg('bot', '已断开连接')
-      // 断开连接时停止音频播放
+      setConnected(false)
+      // 断开连接时停止音频播放并重置播放标志
       if (audioPlayerRef.current) {
         audioPlayerRef.current.stop()
       }
+      hasPlayedAudioRef.current = false // 重置音频播放标志
     })
     const offError = EOn('error', (err) => {
       setConnecting(false)
-      setShowSettings(true)
+      setConnected(false)
+      setCurrentPage('settings')
       appendMsg('bot', `连接错误：${escapeHtml(String(err))}`)
     })
     const offConfig = EOn('config', (m) => {
@@ -592,7 +475,18 @@ function App() {
 
   const onSend = (text) => {
     appendMsg('user', escapeHtml(text))
-    EEmit('send_text', text)
+    if (connected) {
+      EEmit('send_text', text)
+      return
+    }
+    // 未连接：排队并自动连接
+    pendingMessagesRef.current.push(text)
+    if (!connecting) {
+      appendMsg('system', '未连接，正在使用当前配置自动连接…')
+      handleConnect(form)
+    } else {
+      appendMsg('system', '正在连接中，消息将稍后发送')
+    }
   }
 
   const startPTT = () => {
@@ -639,7 +533,7 @@ function App() {
           if (wsToken) resolved.token = wsToken
         } catch (e) {
           setConnecting(false)
-          setShowSettings(true)
+          setCurrentPage('settings')
           appendMsg('bot', `OTA 获取失败：${escapeHtml(String(e))}`)
           return
         }
@@ -650,38 +544,50 @@ function App() {
       EventsEmit('connect_mqtt', { broker: f.broker, username: f.username, password: f.password, pub: f.pub, sub: f.sub, client_id: f.client_id, device_id: f.device_id, token: f.token })
       EventsEmit('save_config', f)
     }
-    setShowSettings(false)
+    setCurrentPage('chat')
   }
 
   const handleDisconnect = () => { EEmit('disconnect') }
 
   return (
-    <div className="chat">
-      {!RT && (
-        <div style={{background:'#b23', color:'#fff', padding:8, textAlign:'center'}}>
-          未检测到 Wails 运行环境。请使用 "wails dev" 或 "wails build" 运行应用。
-        </div>
-      )}
-      <ChatHeader 
-        onToggleSettings={()=> setShowSettings(s=>!s)} 
-        subtitle={subtitle} 
-        isPlayingAudio={isPlayingAudio} 
-        audioStats={audioStats}
-      />
-      <SettingsPanel 
-        open={showSettings} 
-        form={form} 
-        setForm={setForm} 
-        onConnect={handleConnect} 
-        onDisconnect={handleDisconnect} 
-        connecting={connecting}
-        audioPlayer={audioPlayerRef.current}
+    <div className="app-container">
+      <CustomTitleBar 
+        title="小智客户端" 
+        subtitle={subtitle}
         isPlayingAudio={isPlayingAudio}
+        audioStats={audioStats}
+        onToggleSettings={() => setCurrentPage(currentPage === 'chat' ? 'settings' : 'chat')}
       />
-      <div className="msg-list" ref={listRef}>
-        {messages.map(m => (<Message key={m.id} role={m.role} text={m.text} time={m.time} />))}
+      <div className="chat">
+        {!RT && (
+          <div style={{background:'#b23', color:'#fff', padding:8, textAlign:'center'}}>
+            未检测到 Wails 运行环境。请使用 "wails dev" 或 "wails build" 运行应用。
+          </div>
+        )}
+      
+      {/* 根据当前页面显示不同内容 */}
+      {currentPage === 'settings' ? (
+        <SettingsPage 
+          form={form} 
+          setForm={setForm} 
+          onConnect={handleConnect} 
+          onDisconnect={handleDisconnect} 
+          connecting={connecting}
+          audioPlayer={audioPlayerRef.current}
+          connectionStatus={subtitle}
+          onBack={() => setCurrentPage('chat')}
+          windowSize={windowSize}
+        />
+      ) : (
+        <>
+          {/* 头部已融合到 CustomTitleBar */}
+          <div className="msg-list" ref={listRef}>
+            {messages.map(m => (<Message key={m.id} role={m.role} text={m.text} time={m.time} />))}
+          </div>
+          <InputBar onSend={onSend} onPTTStart={startPTT} onPTTStop={stopPTT} recording={recording} pttTime={pttTime} />
+        </>
+      )}
       </div>
-      <InputBar onSend={onSend} onPTTStart={startPTT} onPTTStop={stopPTT} recording={recording} pttTime={pttTime} />
     </div>
   )
 }

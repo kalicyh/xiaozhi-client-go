@@ -1,0 +1,211 @@
+/* 自定义标题栏样式 - 匹配应用主题 */
+.custom-titlebar {
+  height: 36px;
+  /* 与聊天头部统一的“深色半透明 + 毛玻璃”材质 */
+  background: linear-gradient(180deg, rgba(15,26,36,.95), rgba(15,26,36,.88));
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  display: flex;
+  align-items: center;
+  user-select: none;
+  position: relative;
+  z-index: 1000;
+  flex-shrink: 0;
+  /* 细腻的下投影让与下方头部更融合 */
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 6px 16px rgba(0,0,0,.28);
+  /* 整个标题栏为拖拽区域（交互元素除外） */
+  -webkit-app-region: drag;
+}
+
+/* 可拖拽区域（保留兼容） */
+.custom-titlebar[data-drag] { -webkit-app-region: drag; }
+
+/* 标题栏内容 */
+.titlebar-content {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0 10px;
+  gap: 8px;
+  /* 内容区域也可拖拽（交互元素除外） */
+  -webkit-app-region: drag;
+}
+
+/* 仅限制交互区域为 no-drag，避免误伤整个栏 */
+.custom-titlebar .toolbar-actions,
+.custom-titlebar .toolbar-actions *,
+.custom-titlebar .window-controls,
+.custom-titlebar .window-controls *,
+.custom-titlebar [data-no-drag] {
+  -webkit-app-region: no-drag;
+}
+
+/* 聊天信息区（左右紧邻：标题在左，副标题在右） */
+.chat-info {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;           /* 允许子项正确收缩 */
+  max-width: 60%;         /* 不占满整行，留出右侧按钮空间 */
+}
+.chat-info .title {
+  font-weight: 800;
+  letter-spacing: .2px;
+  color: #fff;
+  line-height: 1.1;
+  white-space: nowrap;     /* 标题不换行 */
+  flex: 0 0 auto;
+}
+.chat-info .subtitle {
+  opacity: .85; 
+  font-size: 12px; 
+  display: flex; 
+  align-items: center; 
+  gap: 8px; 
+  color: #dce7f1;
+  min-width: 0;            /* 开启省略号所需 */
+  flex: 1 1 auto;          /* 占用剩余空间并可收缩 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态点样式保留 */
+.chat-info .subtitle.online::before,
+.chat-info .subtitle.offline::before {
+  content: '';
+  display: inline-block;
+  width: 8px; height: 8px; border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.06) inset;
+}
+.chat-info .subtitle.online::before { background: #2ecc71; }
+.chat-info .subtitle.offline::before { background: #e67e22; }
+
+.chat-info .audio-indicator { 
+  opacity: 1; 
+  font-size: 13px; 
+  animation: audioPlaying 1.5s infinite; 
+}
+
+@keyframes audioPlaying {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* 工具与窗口按钮 */
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto; /* 将设置按钮组推到右侧 */
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* 移除 margin-left:auto，由上一个组负责推右 */
+  -webkit-app-region: no-drag; /* 按钮区域不可拖拽 */
+}
+
+.control-btn {
+  width: 46px;
+  height: 36px;
+  border: 1px solid rgba(255,255,255,.06);
+  background: rgba(255,255,255,0.02);
+  color: #e9eef3;
+  font-size: 10px;
+  font-family: 'Segoe UI', sans-serif;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color .15s ease, border-color .15s ease, transform .08s ease;
+  position: relative;
+  border-radius: 8px;
+}
+
+.control-btn:hover {
+  background: rgba(255,255,255,.08);
+  border-color: rgba(255,255,255,.12);
+}
+
+.control-btn:active {
+  transform: translateY(1px);
+  background: rgba(255,255,255,.12);
+}
+
+/* 特殊样式：关闭按钮 */
+.close-btn:hover {
+  background: #e74c3c;
+  color: white;
+  border-color: #e74c3c;
+}
+
+.close-btn:active {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+
+/* Windows风格的图标 - 优化显示 */
+.minimize-btn {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.minimize-btn::before {
+  content: '─';
+  font-weight: bold;
+}
+
+.maximize-btn {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.maximize-btn::before {
+  content: '🗖';
+}
+
+.maximize-btn.maximized::before {
+  content: '🗗';
+}
+
+.close-btn {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.close-btn::before {
+  content: '✕';
+  font-weight: bold;
+}
+
+/* 窄屏时回退为上下布局，避免拥挤 */
+@media (max-width: 600px) {
+  .chat-info { 
+    flex-direction: column; 
+    align-items: flex-start; 
+    gap: 2px; 
+  }
+  .chat-info .subtitle {
+    max-width: 100%;
+    white-space: normal;
+    overflow: visible;
+  }
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .custom-titlebar {
+    height: 40px;
+  }
+  
+  .control-btn {
+    width: 48px;
+    height: 40px;
+  }
+}

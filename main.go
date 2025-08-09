@@ -21,5 +21,9 @@ func main() {
 		AssetServer: &assetserver.Options{ Assets: assets },
 		OnStartup: app.startup,
 		Bind: []interface{}{ app },
+		// 自定义窗口设置
+		Frameless: true,
+		CSSDragProperty: "-webkit-app-region",
+		CSSDragValue: "drag",
 	}); err != nil { println("Error:", err.Error()) }
 }

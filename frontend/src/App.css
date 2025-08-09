@@ -1,181 +1,112 @@
 /* 全局与基础布局 */
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; }
-body { margin: 0; background: #0e1621; }
-#root { display: grid; place-items: center; background: #0e1621; }
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+body { background: #0e1621; }
+#root { display: flex; background: #0e1621; }
 
-/* Telegram-like chat layout（自适应优化） */
-.chat {
-  width: min(960px, 100vw);
-  height: min(800px, 100vh);
-  background: #17212b;
+/* 应用容器 - 占满整个窗口 */
+.app-container {
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
+  width: 100vw;
+  height: 100vh;
+  background: #17212b;
   overflow: hidden;
-  box-shadow: 0 10px 30px rgba(0,0,0,.4);
-  transition: all 0.3s ease-in-out;
+  position: relative;
+}
+
+/* Telegram-like chat layout（作为app-container的子元素） */
+.chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: transparent; /* 使用父容器的背景 */
+  /* 关键：允许内部可滚动子项正确收缩，避免把输入栏挤出视口 */
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 平板和小屏幕 */
+@media (max-width: 768px) {
+  .chat { 
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
 }
 
 /* 全屏状态样式 */
 .chat.fullscreen {
-  width: 100vw !important;
-  height: 100vh !important;
+  width: 100% !important;
+  height: 100% !important;
   border-radius: 0 !important;
   box-shadow: none !important;
 }
 
 /* 最大化状态样式 */
 .chat.maximized {
-  width: 100vw !important;
-  height: 100vh !important;
+  width: 100% !important;
+  height: 100% !important;
   border-radius: 0 !important;
   box-shadow: none !important;
 }
 
 /* 大窗口状态样式 */
 .chat.large {
-  width: 95vw !important;
-  height: 90vh !important;
-  border-radius: 16px !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
-/* 全屏时调整字体和元素大小 */
-.chat.fullscreen .chat-header {
-  padding: 18px 24px;
-  font-size: 1.1em;
+/* 中大窗口状态样式 */
+.chat.medium-large {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
-.chat.large .chat-header {
-  padding: 16px 20px;
-  font-size: 1.05em;
+/* 紧凑模式样式 */
+.chat.compact {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
-.chat.fullscreen .settings {
-  padding: 16px;
-  gap: 12px;
+/* 统一的头部样式：与标题栏融合 */
+.chat-header { 
+  padding: 12px 16px; 
+  background: linear-gradient(180deg, rgba(15,26,36,.92), rgba(15,26,36,.86));
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  color: #fff; 
+  display: flex; 
+  align-items: center; 
+  gap: 10px; 
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 8px 18px rgba(0,0,0,.22);
 }
+.chat-header .title { font-weight: 800; letter-spacing: .2px; }
+.chat-header .subtitle { opacity: .8; font-size: 12px; display: flex; align-items: center; gap: 8px; }
 
-.chat.large .settings {
-  padding: 14px;
-  gap: 10px;
+/* 在线/离线状态色点缀 */
+.chat-header .subtitle.online::before,
+.chat-header .subtitle.offline::before {
+  content: '';
+  display: inline-block;
+  width: 8px; height: 8px; border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.06) inset;
 }
+.chat-header .subtitle.online::before { background: #2ecc71; }
+.chat-header .subtitle.offline::before { background: #e67e22; }
 
-.chat.fullscreen .settings .row {
-  gap: 12px;
-}
-
-.chat.large .settings .row {
-  gap: 10px;
-}
-
-.chat.fullscreen .settings input,
-.chat.fullscreen .settings select,
-.chat.fullscreen .settings textarea {
-  padding: 10px 12px;
-  font-size: 1.05em;
-}
-
-.chat.large .settings input,
-.chat.large .settings select,
-.chat.large .settings textarea {
-  padding: 9px 11px;
-  font-size: 1.02em;
-}
-
-.chat.fullscreen .msg-list {
-  padding: 20px 24px;
-  gap: 14px;
-}
-
-.chat.large .msg-list {
-  padding: 18px 20px;
-  gap: 12px;
-}
-
-.chat.fullscreen .avatar {
-  width: 32px;
-  height: 32px;
-  font-size: 16px;
-}
-
-.chat.large .avatar {
-  width: 30px;
-  height: 30px;
-  font-size: 15px;
-}
-
-.chat.fullscreen .bubble {
-  padding: 12px 16px;
-  font-size: 1.05em;
-  max-width: 75%;
-}
-
-.chat.large .bubble {
-  padding: 11px 14px;
-  font-size: 1.02em;
-  max-width: 72%;
-}
-
-.chat.fullscreen .bubble .meta {
-  font-size: 12px;
-  margin-top: 8px;
-}
-
-.chat.large .bubble .meta {
-  font-size: 11.5px;
-  margin-top: 7px;
-}
-
-.chat.fullscreen .input-bar {
-  padding: 12px 16px;
-  gap: 12px;
-}
-
-.chat.large .input-bar {
-  padding: 11px 14px;
-  gap: 11px;
-}
-
-.chat.fullscreen .text-input {
-  padding: 12px 16px;
-  font-size: 1.05em;
-  min-height: 48px;
-}
-
-.chat.large .text-input {
-  padding: 11px 14px;
-  font-size: 1.02em;
-  min-height: 45px;
-}
-
-.chat.fullscreen .mic {
-  width: 48px;
-  height: 48px;
-  font-size: 1.1em;
-}
-
-.chat.large .mic {
-  width: 45px;
-  height: 45px;
-  font-size: 1.05em;
-}
-
-.chat.fullscreen .send {
-  padding: 0 20px;
-  font-size: 1.05em;
-}
-
-.chat.large .send {
-  padding: 0 18px;
-  font-size: 1.02em;
-}
-.chat-header { padding: 14px 18px; background: #0f1a24; color: #fff; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(255,255,255,.06) }
-.chat-header .title { font-weight: 700; }
-.chat-header .subtitle { opacity: .6; font-size: 12px; display: flex; align-items: center; gap: 6px; }
 .chat-header .subtitle .audio-indicator { 
   opacity: 1; 
-  font-size: 14px; 
+  font-size: 13px; 
   animation: audioPlaying 1.5s infinite; 
 }
 
@@ -184,8 +115,23 @@ body { margin: 0; background: #0e1621; }
   50% { opacity: 0.6; }
 }
 .chat-header .spacer { flex: 1 }
-.icon-btn { background: transparent; border: none; color: #dce7f1; font-size: 16px; cursor: pointer; }
-.icon-btn:hover { opacity: .8 }
+
+/* 统一的图标按钮视觉（与窗口按钮呼应） */
+.icon-btn { 
+  background: rgba(255,255,255,0.04); 
+  border: 1px solid rgba(255,255,255,.08); 
+  color: #dce7f1; 
+  font-size: 16px; 
+  cursor: pointer; 
+  padding: 6px 10px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color .15s ease, border-color .15s ease, transform .08s ease, opacity .15s ease;
+}
+.icon-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,.16); opacity: 1 }
+.icon-btn:active { transform: translateY(1px); }
 
 /* Settings panel */
 .settings { padding: 12px; background: #0f1a24; border-bottom: 1px solid rgba(255,255,255,.06); display: grid; gap: 8px; }
@@ -240,7 +186,16 @@ body { margin: 0; background: #0e1621; }
 }
 
 /* Message list */
-.msg-list { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.msg-list { 
+  flex: 1; 
+  overflow: auto; 
+  padding: 16px; 
+  display: flex; 
+  flex-direction: column; 
+  gap: 10px; 
+  /* 关键：在 flex 容器中可正常收缩，避免撑高父级 */
+  min-height: 0;
+}
 .msg-row { display: flex; gap: 8px; align-items: flex-end; }
 .msg-row.left { justify-content: flex-start; }
 .msg-row.right { justify-content: flex-end; }
@@ -254,7 +209,18 @@ body { margin: 0; background: #0e1621; }
 .bubble .meta { opacity: .55; font-size: 11px; margin-top: 6px; text-align: right; }
 
 .input-bar { display: flex; gap: 10px; padding: 10px; background: #0f1a24; border-top: 1px solid rgba(255,255,255,.06); padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
-.text-input { flex: 1; resize: none; background: #0d141c; color: #e9eef3; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 10px 12px; outline: none; min-height: 42px; }
+.text-input { 
+  flex: 1; 
+  resize: none; 
+  background: #0d141c; 
+  color: #e9eef3; 
+  border: 1px solid rgba(255,255,255,.08); 
+  border-radius: 10px; 
+  padding: 10px 12px; 
+  outline: none; 
+  min-height: 42px; 
+  overflow: hidden; 
+}
 .send { background: #2b8a3e; color: #fff; border: none; border-radius: 10px; padding: 0 16px; font-weight: 700; cursor: pointer; }
 .send:hover { filter: brightness(1.05); }
 .mic { width: 42px; height: 42px; border-radius: 50%; border: none; background: #25597a; color: #fff; font-weight: 800; cursor: pointer; }
@@ -264,19 +230,229 @@ body { margin: 0; background: #0e1621; }
 
 @keyframes pulse { 0%{ box-shadow: 0 0 0 0 rgba(255,0,0,.6) } 70%{ box-shadow: 0 0 0 12px rgba(255,0,0,0) } 100%{ box-shadow: 0 0 0 0 rgba(255,0,0,0) } }
 
-/* 小屏与矮窗口优化 */
+/* 小屏与矮窗口优化 - 增强版 */
 @media (max-width: 768px) {
-  #root { place-items: stretch; }
-  .chat { width: 100vw; height: 100vh; border-radius: 0; box-shadow: none; }
-  .chat-header { padding: 12px; }
-  .settings { max-height: 45vh; overflow: auto; }
-  .msg-list { padding: 12px; }
-  .bubble { max-width: 85%; }
-  .input-bar { gap: 8px; padding: 8px; }
-  .text-input { min-height: 38px; }
+  #root { 
+    place-items: stretch; 
+    padding: 0;
+  }
+  
+  .chat { 
+    width: 100%;            /* 由 100vw 改为 100%，避免横向溢出 */
+    height: auto;           /* 由 100vh 改为 auto，交由 flex 分配剩余高度 */
+    border-radius: 0; 
+    box-shadow: none;
+    max-width: none;
+    max-height: none;
+    overflow: hidden;       /* 仅让消息区滚动 */
+  }
+  
+  .chat-header { 
+    padding: 12px 16px; 
+    font-size: 0.95em;
+  }
+  
+  .chat-header .title {
+    font-size: 1.1em;
+  }
+  
+  .chat-header .subtitle {
+    font-size: 11px;
+  }
+  
+  .settings { 
+    max-height: 45vh; 
+    overflow: auto; 
+    padding: 10px 12px;
+  }
+  
+  .settings .row {
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  
+  .settings input, 
+  .settings select {
+    padding: 8px 10px;
+    font-size: 16px; /* 防止iOS自动缩放 */
+    min-height: 44px; /* iOS触摸目标最小尺寸 */
+  }
+  
+  .settings .primary,
+  .settings .danger {
+    padding: 10px 16px;
+    font-size: 1em;
+    min-height: 44px;
+  }
+  
+  .msg-list { 
+    padding: 12px 16px; 
+    gap: 10px;
+  }
+  
+  .bubble { 
+    max-width: 85%; 
+    padding: 10px 12px;
+    font-size: 0.95em;
+  }
+  
+  .bubble .meta {
+    font-size: 10px;
+    margin-top: 4px;
+  }
+  
+  .avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 15px;
+  }
+  
+  .input-bar { 
+    gap: 8px; 
+    padding: 8px 12px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  
+  .text-input { 
+    min-height: 44px; /* iOS触摸友好 */
+    padding: 10px 12px;
+    font-size: 16px; /* 防止iOS缩放 */
+  }
+  
+  .mic {
+    width: 44px;
+    height: 44px;
+    font-size: 1.1em;
+  }
+  
+  .send {
+    padding: 0 16px;
+    min-height: 44px;
+    font-size: 1em;
+  }
 }
+
+/* 更小的手机屏幕 */
+@media (max-width: 480px) {
+  .chat-header { 
+    padding: 10px 12px; 
+  }
+  
+  .chat-header .title {
+    font-size: 1em;
+  }
+  
+  .chat-header .subtitle {
+    font-size: 10px;
+  }
+  
+  .settings {
+    padding: 8px 10px;
+  }
+  
+  .settings input, 
+  .settings select {
+    padding: 6px 8px;
+    font-size: 16px;
+  }
+  
+  .msg-list { 
+    padding: 10px 12px; 
+    gap: 8px;
+  }
+  
+  .bubble {
+    padding: 8px 10px;
+    font-size: 0.9em;
+  }
+  
+  .input-bar { 
+    padding: 6px 10px;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  }
+  
+  .text-input {
+    padding: 8px 10px;
+  }
+  
+  .mic {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .send {
+    padding: 0 12px;
+    font-size: 0.9em;
+  }
+}
+
+/* 横屏模式优化 */
+@media (max-height: 600px) and (orientation: landscape) {
+  .settings { 
+    max-height: 40vh; 
+  }
+  
+  .chat-header {
+    padding: 8px 16px;
+  }
+  
+  .msg-list {
+    padding: 8px 16px;
+  }
+  
+  .input-bar {
+    padding: 6px 12px;
+  }
+}
+
+/* 极矮窗口 */
 @media (max-height: 600px) {
-  .settings { max-height: 35vh; }
+  .settings { 
+    max-height: 35vh; 
+  }
+  
+  .bubble {
+    padding: 6px 10px;
+    font-size: 0.9em;
+  }
+  
+  .avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+  }
+}
+
+/* 超宽屏幕优化 */
+@media (min-width: 1600px) {
+  .chat {
+    width: min(1200px, 80vw);
+    height: min(950px, 80vh);
+    border-radius: 20px;
+  }
+  
+  .chat-header {
+    padding: 16px 24px;
+    font-size: 1.05em;
+  }
+  
+  .settings {
+    padding: 16px 20px;
+  }
+  
+  .msg-list {
+    padding: 20px 24px;
+    gap: 12px;
+  }
+  
+  .bubble {
+    padding: 12px 16px;
+    font-size: 1.02em;
+  }
+  
+  .input-bar {
+    padding: 12px 20px;
+  }
 }
 
 /* 旧模板样式（保留以兼容可能使用的类） */
