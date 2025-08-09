@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { GetSystemVolume, SetSystemVolume, IsSystemVolumeSupported } from '../../wailsjs/go/main/App'
+import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import './SettingsPage.css'
 
 function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audioPlayer, onBack, connectionStatus, windowSize: propWindowSize }) {
@@ -154,6 +155,21 @@ function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audi
               <option value="mqtt">MQTT + UDP</option>
               <option value="ws">WebSocket</option>
             </select>
+          </div>
+
+          {/* 新增：系统提示气泡 */}
+          <div className="row">
+            <label>显示系统提示气泡</label>
+            <input 
+              type="checkbox" 
+              checked={!!toBool(form.show_system_bubbles)} 
+              onChange={(e)=>{
+                const checked = e.target.checked
+                setForm(s => ({ ...s, show_system_bubbles: checked }))
+                // 立刻持久化到 DB
+                EventsEmit('save_config', { show_system_bubbles: checked })
+              }} 
+            />
           </div>
 
           {form.protocol === 'ws' ? (

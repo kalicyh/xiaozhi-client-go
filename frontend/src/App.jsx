@@ -116,6 +116,8 @@ function App() {
     ws: 'ws://127.0.0.1:8000',
     use_ota: true,
     enable_token: true,
+    // 新增：控制系统提示气泡显隐
+    show_system_bubbles: true,
     ota_url: 'https://api.tenclass.net/xiaozhi/ota/',
     ota_device_id: '58:8c:81:66:01:CC',
     ota_body: JSON.stringify({
@@ -180,6 +182,17 @@ function App() {
   const interceptQuotaRef = useRef(0)
   // 新增：自动连接标志（用于抑制“已连接”重复提示）
   const autoConnectingRef = useRef(false)
+  // 新增：系统气泡显隐的 ref，避免事件回调闭包拿到旧状态
+  const showSystemBubblesRef = useRef(true)
+
+  // 同步系统气泡显隐到 ref，并在关闭时清理已存在的系统消息
+  useEffect(() => {
+    const v = toBool(form.show_system_bubbles)
+    showSystemBubblesRef.current = v
+    if (!v) {
+      setMessages(prev => prev.filter(m => m.role !== 'system'))
+    }
+  }, [form.show_system_bubbles])
 
   // 新增：更新已有消息文本
   const updateMsgText = (id, newHtmlText) => {
@@ -558,9 +571,7 @@ function App() {
     const offError = EOn('error', (err) => {
       setConnecting(false)
       setConnected(false)
-      setCurrentPage('settings')
-      // 出错时重置自动连接标志
-      autoConnectingRef.current = false
+      // 不再自动跳转到设置页；仅提示错误并保持当前页面
 
       const raw = String(err || '')
       const lower = raw.toLowerCase()
@@ -591,6 +602,8 @@ function App() {
           ...obj,
           use_ota: toBool(obj?.use_ota ?? f.use_ota),
           enable_token: toBool(obj?.enable_token ?? f.enable_token),
+          // 新增：恢复系统气泡显隐
+          show_system_bubbles: toBool(obj?.show_system_bubbles ?? f.show_system_bubbles),
         }))
       } catch {
         // ignore
@@ -617,6 +630,10 @@ function App() {
   }
 
   const appendMsg = (role, text, detail, avatar) => {
+    // 使用 ref 中的最新值，避免闭包导致的旧状态
+    if (role === 'system' && !showSystemBubblesRef.current) {
+      return
+    }
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, text, time: formatTime(), detail, avatar }])
   }
 
@@ -744,7 +761,7 @@ function App() {
         <>
           {/* 头部已融合到 CustomTitleBar */}
           <div className="msg-list" ref={listRef}>
-            {messages.map(m => (
+            {(toBool(form.show_system_bubbles) ? messages : messages.filter(m => m.role !== 'system')).map(m => (
               <Message
                 key={m.id}
                 role={m.role}
