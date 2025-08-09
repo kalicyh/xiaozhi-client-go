@@ -20,12 +20,26 @@ class AudioPlayer {
     this.goPCMProcessor = new GoPCMAudioProcessor()
     
     // 缓冲区管理 - 配合 Go 端 Opus 解码器
-    this.sampleRate = 24000 // 固定使用24kHz
+    this.sampleRate = 48000 // 默认使用 48kHz，更高保真
     
     // 回调函数
     this.onStartPlay = null
     this.onStopPlay = null
     this.onError = null
+  }
+
+  /**
+   * 设置播放采样率（同步到处理器）
+   */
+  setSampleRate(sampleRate) {
+    const sr = Number(sampleRate)
+    if (!Number.isFinite(sr) || sr <= 0) return
+    if (this.sampleRate === sr) return
+    this.sampleRate = sr
+    if (this.goPCMProcessor && typeof this.goPCMProcessor.setSampleRate === 'function') {
+      this.goPCMProcessor.setSampleRate(sr)
+    }
+    console.log(`AudioPlayer 采样率设为 ${sr}Hz`)
   }
 
   /**
@@ -89,7 +103,7 @@ class AudioPlayer {
         return false
       }
 
-      // 创建 AudioBuffer，使用24kHz采样率
+      // 创建 AudioBuffer，使用当前采样率
       const audioBuffer = this.audioContext.createBuffer(
         1, // 单声道
         processedPCM.length,

@@ -5,7 +5,7 @@
 
 class GoPCMAudioProcessor {
   constructor() {
-    this.sampleRate = 24000  // 与 Go 端保持一致
+    this.sampleRate = 48000  // 与 Go 端保持一致（默认 48kHz）
     this.channels = 1        // 单声道
     this.isInitialized = false
     
@@ -22,6 +22,15 @@ class GoPCMAudioProcessor {
     
     // 回调函数
     this.onError = null
+  }
+
+  /** 同步设置采样率 */
+  setSampleRate(sr) {
+    const v = Number(sr)
+    if (!Number.isFinite(v) || v <= 0) return
+    if (this.sampleRate === v) return
+    this.sampleRate = v
+    console.log(`[GoPCMAudioProcessor] 采样率设为 ${v}Hz`)
   }
 
   /**
@@ -218,19 +227,11 @@ class GoPCMAudioProcessor {
     console.log('Go PCM 音频处理器状态已重置')
   }
 
-  /**
-   * 获取采样率
-   */
-  getSampleRate() {
-    return this.sampleRate
-  }
+  /** 获取采样率 */
+  getSampleRate() { return this.sampleRate }
 
-  /**
-   * 获取声道数
-   */
-  getChannels() {
-    return this.channels
-  }
+  /** 获取声道数 */
+  getChannels() { return this.channels }
 }
 
 export default GoPCMAudioProcessor

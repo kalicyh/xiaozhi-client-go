@@ -54,9 +54,9 @@ func (a *App) startup(ctx context.Context) {
 	a.store, _ = store.Open("xiaozhi.db")
 	_ = a.store.InitConfig()
 
-	// 初始化 Opus 解码器（24kHz 单声道）
+	// 初始化 Opus 解码器（默认使用更高质量：48kHz 单声道）
 	var err error
-	a.opusDecoder, err = audio.NewOpusDecoder(24000, 1)
+	a.opusDecoder, err = audio.NewOpusDecoder(48000, 1)
 	if err != nil {
 		log.Warn("Opus 解码器初始化失败", "err", err)
 	} else {
@@ -69,6 +69,37 @@ func (a *App) startup(ctx context.Context) {
 		log.Info("系统音量控制初始化成功")
 	} else {
 		log.Warn("系统音量控制不可用")
+	}
+
+	// helper: 根据 hello 的音频参数重建解码器
+	rebuildDecoder := func(ap map[string]any) {
+		if ap == nil { return }
+		getInt := func(k string, def int) int {
+			if v, ok := ap[k]; ok {
+				switch t := v.(type) {
+				case float64:
+					return int(t)
+				case int:
+					return t
+				case json.Number:
+					if iv, err := t.Int64(); err == nil { return int(iv) }
+				}
+			}
+			return def
+		}
+		sr := getInt("sample_rate", 48000)
+		ch := getInt("channels", 1)
+		if sr <= 0 { sr = 48000 }
+		if ch <= 0 { ch = 1 }
+		// 若与当前不一致则重建
+		if a.opusDecoder == nil || a.opusDecoder.GetSampleRate() != sr || a.opusDecoder.GetChannels() != ch {
+			if dec, err := audio.NewOpusDecoder(sr, ch); err == nil {
+				a.opusDecoder = dec
+				logging.L().With("module", "audio").Info("重建 Opus 解码器", "sample_rate", sr, "channels", ch)
+			} else {
+				logging.L().With("module", "audio").Warn("重建 Opus 解码器失败", "err", err)
+			}
+		}
 	}
 
 	// events
@@ -120,6 +151,10 @@ func (a *App) startup(ctx context.Context) {
 			cfg.MQTTKeepAliveSec = 240
 			c := client.New(cfg)
 			c.OnJSON = func(ctx context.Context, msg map[string]any) {
+				// 根据 hello 动态调整解码器
+				if t, _ := msg["type"].(string); t == "hello" {
+					if ap, _ := msg["audio_params"].(map[string]any); ap != nil { rebuildDecoder(ap) }
+				}
 				b, _ := json.Marshal(msg)
 				_ = a.store.SaveMessage(context.Background(), c.SessionID, "in", "json", string(b), time.Now().Unix())
 				runtime.EventsEmit(a.ctx, "text", string(b))
@@ -183,6 +218,10 @@ func (a *App) startup(ctx context.Context) {
 			}
 			c := client.New(cfg)
 			c.OnJSON = func(ctx context.Context, msg map[string]any) {
+				// 根据 hello 动态调整解码器
+				if t, _ := msg["type"].(string); t == "hello" {
+					if ap, _ := msg["audio_params"].(map[string]any); ap != nil { rebuildDecoder(ap) }
+				}
 				b, _ := json.Marshal(msg)
 				_ = a.store.SaveMessage(context.Background(), c.SessionID, "in", "json", string(b), time.Now().Unix())
 				runtime.EventsEmit(a.ctx, "text", string(b))
@@ -243,6 +282,10 @@ func (a *App) startup(ctx context.Context) {
 				if tok := getStr(kv, "token"); tok != "" { cfg.AuthToken = tok }
 				a.client = client.New(cfg)
 				a.client.OnJSON = func(ctx context.Context, msg map[string]any) {
+					// 根据 hello 动态调整解码器
+					if t, _ := msg["type"].(string); t == "hello" {
+						if ap, _ := msg["audio_params"].(map[string]any); ap != nil { rebuildDecoder(ap) }
+					}
 					b, _ := json.Marshal(msg)
 					_ = a.store.SaveMessage(context.Background(), a.client.SessionID, "in", "json", string(b), time.Now().Unix())
 					runtime.EventsEmit(a.ctx, "text", string(b))

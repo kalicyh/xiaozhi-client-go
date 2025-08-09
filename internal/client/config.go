@@ -57,7 +57,7 @@ func DefaultConfig() Config {
 	return Config{
 		ProtocolVersion: 1,
 		TokenMethod:     "header", // 默认使用 Authorization 头
-		Audio: AudioParams{Format: "opus", SampleRate: 16000, Channels: 1, FrameDuration: 60},
+		Audio: AudioParams{Format: "opus", SampleRate: 48000, Channels: 1, FrameDuration: 20},
 		HelloTimeout:    10 * time.Second,
 		MQTTPublishTopic:   "devices/+/tx",
 		MQTTSubscribeTopic: "devices/+/rx",

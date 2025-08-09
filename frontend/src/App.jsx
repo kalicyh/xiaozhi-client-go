@@ -333,6 +333,12 @@ function App() {
           const ch = ap.channels
           const fd = ap.frame_duration || ap.frameDuration
           const tp = obj.transport === 'websocket' ? 'WebSocket' : (obj.transport || '未知')
+
+          // 同步前端音频采样率
+          if (audioPlayerRef.current && sr) {
+            try { audioPlayerRef.current.setSampleRate(Number(sr)) } catch {}
+          }
+
           summarized = `会话握手成功 · 传输: ${escapeHtml(String(tp))} · 音频: ${escapeHtml(String(fmt || ''))} ${escapeHtml(String(sr || '?'))}Hz ${escapeHtml(String(ch || '?'))}声道 · 帧 ${escapeHtml(String(fd || '?'))}ms`
           return appendMsg('system', summarized, JSON.stringify(obj, null, 2))
         }
@@ -355,6 +361,12 @@ function App() {
           const state = obj.state || obj.status
           const sessionId = obj.session_id || obj.sessionId || 'default'
           const content = obj.text ?? obj.content ?? ''
+
+          // 同步采样率（如果提供）
+          const ttsSr = obj.sample_rate || obj.sampleRate
+          if (audioPlayerRef.current && ttsSr) {
+            try { audioPlayerRef.current.setSampleRate(Number(ttsSr)) } catch {}
+          }
 
           if (state === 'sentence_start') {
             const id = crypto.randomUUID()
