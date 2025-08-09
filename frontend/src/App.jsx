@@ -12,11 +12,16 @@ const RT = typeof window !== 'undefined' && window.runtime
 const EOn = RT ? EventsOn : (event, cb) => { console.warn('[Mock] EventsOn', event); return () => {} }
 const EEmit = RT ? EventsEmit : (...args) => { console.warn('[Mock] EventsEmit', args) }
 
-function Message({ role, text, time }) {
+function Message({ role, text, time, detail, onShowDetail }) {
   if (role === 'system') {
+    const clickable = !!detail
     return (
       <div className="msg-row left" style={{justifyContent: 'center'}}>
-        <div className="bubble system">
+        <div
+          className="bubble system"
+          style={clickable ? { cursor: 'pointer' } : undefined}
+          onClick={clickable ? () => onShowDetail && onShowDetail('详细信息', detail) : undefined}
+        >
           <div className="text" dangerouslySetInnerHTML={{ __html: text }}></div>
         </div>
       </div>
@@ -164,6 +169,8 @@ function App() {
   const audioPlayerRef = useRef(null) // 音频播放器引用
   const hasPlayedAudioRef = useRef(false) // 标记是否有过音频播放
   const pendingMessagesRef = useRef([]) // 新增：待发送消息队列
+  const disconnectNoticeRef = useRef(0) // 新增：断开提示去重时间戳
+  const [detailModal, setDetailModal] = useState({ open: false, title: '', content: '' }) // 新增：详情弹窗
 
   // 初始化音频播放器
   useEffect(() => {
@@ -283,10 +290,56 @@ function App() {
   useEffect(() => {
     // 消息 & 连接状态监听（使用安全包装）
     const offText = EOn('text', (payload) => {
+      // 统一拿到原始字符串
+      const raw = typeof payload === 'string' ? payload : JSON.stringify(payload)
+
+      // 尝试解析为三类结构，并生成中文概括
+      try {
+        const obj = typeof payload === 'string' ? JSON.parse(payload) : payload
+        let summarized = ''
+
+        // hello
+        if (obj && obj.type === 'hello') {
+          const ap = obj.audio_params || {}
+          const fmt = (ap.format || '').toUpperCase()
+          const sr = ap.sample_rate || ap.sampleRate
+          const ch = ap.channels
+          const fd = ap.frame_duration || ap.frameDuration
+          const tp = obj.transport === 'websocket' ? 'WebSocket' : (obj.transport || '未知')
+          summarized = `会话握手成功 · 传输: ${escapeHtml(String(tp))} · 音频: ${escapeHtml(String(fmt || ''))} ${escapeHtml(String(sr || '?'))}Hz ${escapeHtml(String(ch || '?'))}声道 · 帧 ${escapeHtml(String(fd || '?'))}ms`
+          return appendMsg('system', summarized, JSON.stringify(obj, null, 2))
+        }
+
+        // mcp initialize
+        if (obj && (obj.type === 'mcp' || (obj.payload && obj.payload.jsonrpc === '2.0'))) {
+          const method = obj.payload?.method || ''
+          if (method === 'initialize') {
+            const pv = obj.payload?.params?.protocolVersion || '-'
+            const cn = obj.payload?.params?.clientInfo?.name || '-'
+            const cv = obj.payload?.params?.clientInfo?.version || ''
+            const vision = obj.payload?.params?.capabilities?.vision ? ' · 启用视觉' : ''
+            summarized = `MCP 初始化 · 协议 ${escapeHtml(String(pv))} · 客户端 ${escapeHtml(String(cn))} ${escapeHtml(String(cv))}${vision}`
+            return appendMsg('system', summarized, JSON.stringify(obj, null, 2))
+          }
+        }
+
+        // tts
+        if (obj && obj.type === 'tts') {
+          const st = obj.state
+          const sr = obj.sample_rate || obj.sampleRate
+          const stTxt = st === 'start' ? '开始' : (st === 'stop' ? '结束' : String(st))
+          summarized = `TTS ${escapeHtml(stTxt)} · 采样率 ${escapeHtml(String(sr || '?'))}Hz`
+          return appendMsg('system', summarized, JSON.stringify(obj, null, 2))
+        }
+      } catch (_) {
+        // 非 JSON 或解析失败，走默认逻辑
+      }
+
+      // 默认：按原逻辑显示（可能是普通文本或 JSON 文本）
       let display = ''
       try {
         const obj = typeof payload === 'string' ? JSON.parse(payload) : payload
-        display = obj.text || obj.content || obj.message || payload
+        display = obj.text || obj.content || obj.message || raw
       } catch {
         display = String(payload)
       }
@@ -408,7 +461,7 @@ function App() {
       setConnecting(false)
       const proto = (info && info.protocol) || form.protocol
       setSubtitle(`在线 · ${proto === 'ws' ? 'WebSocket' : 'MQTT'}`)
-      appendMsg('bot', `已连接（${proto}）`)
+      appendMsg('system', `已连接（${proto}）`)
       setConnected(true)
       // 发送排队消息
       const queued = pendingMessagesRef.current || []
@@ -421,7 +474,7 @@ function App() {
     })
     const offDisconnected = EOn('disconnected', () => {
       setSubtitle('离线')
-      appendMsg('bot', '已断开连接')
+      notifyDisconnectedOnce()
       setConnected(false)
       // 断开连接时停止音频播放并重置播放标志
       if (audioPlayerRef.current) {
@@ -433,7 +486,26 @@ function App() {
       setConnecting(false)
       setConnected(false)
       setCurrentPage('settings')
-      appendMsg('bot', `连接错误：${escapeHtml(String(err))}`)
+
+      const raw = String(err || '')
+      const lower = raw.toLowerCase()
+      const isTimeout = lower.includes('timeout') || lower.includes('timed out') || lower.includes('i/o timeout') || lower.includes('deadline')
+      const isClosed = lower.includes('eof') || lower.includes('closed') || lower.includes('reset by peer')
+
+      // 精简错误提示 + 可点击查看详情
+      if (isTimeout) {
+        appendMsg('system', '❌ 连接超时', raw)
+      } else if (isClosed) {
+        appendMsg('system', '❌ 连接已关闭', raw)
+      } else {
+        appendMsg('system', '❌ 连接错误', raw)
+      }
+
+      // 根据错误内容提示断开（去重）
+      if (isTimeout || isClosed) {
+        setSubtitle('离线')
+        notifyDisconnectedOnce()
+      }
     })
     const offConfig = EOn('config', (m) => {
       // 从持久化恢复
@@ -469,8 +541,16 @@ function App() {
     return `${h}:${m}`
   }
 
-  const appendMsg = (role, text) => {
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, text, time: formatTime() }])
+  const appendMsg = (role, text, detail) => {
+    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, text, time: formatTime(), detail }])
+  }
+
+  // 新增：断开提示（去重，2 秒内只提示一次）
+  const notifyDisconnectedOnce = () => {
+    const now = Date.now()
+    if (now - disconnectNoticeRef.current < 2000) return
+    disconnectNoticeRef.current = now
+    appendMsg('system', '已断开连接')
   }
 
   const onSend = (text) => {
@@ -582,12 +662,27 @@ function App() {
         <>
           {/* 头部已融合到 CustomTitleBar */}
           <div className="msg-list" ref={listRef}>
-            {messages.map(m => (<Message key={m.id} role={m.role} text={m.text} time={m.time} />))}
+            {messages.map(m => (<Message key={m.id} role={m.role} text={m.text} time={m.time} detail={m.detail} onShowDetail={(title, content) => setDetailModal({ open: true, title, content })} />))}
           </div>
           <InputBar onSend={onSend} onPTTStart={startPTT} onPTTStop={stopPTT} recording={recording} pttTime={pttTime} />
         </>
       )}
       </div>
+
+      {/* 详情弹窗 */}
+      {detailModal.open && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h3>{detailModal.title}</h3>
+              <button className="close" onClick={() => setDetailModal({ open: false, title: '', content: '' })}>✖</button>
+            </div>
+            <div className="modal-content">
+              <pre>{detailModal.content}</pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

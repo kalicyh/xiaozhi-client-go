@@ -195,7 +195,17 @@ body { background: #0e1621; }
   gap: 10px; 
   /* 关键：在 flex 容器中可正常收缩，避免撑高父级 */
   min-height: 0;
+  /* 同步设置页滚动条样式 */
+  scrollbar-width: thin;                         /* Firefox */
+  scrollbar-color: rgba(43, 82, 120, 0.6) transparent;
 }
+
+/* 同步设置页滚动条样式（WebKit） */
+.msg-list::-webkit-scrollbar { width: 8px; }
+.msg-list::-webkit-scrollbar-track { background: transparent; }
+.msg-list::-webkit-scrollbar-thumb { background: rgba(43, 82, 120, 0.6); border-radius: 4px; }
+.msg-list::-webkit-scrollbar-thumb:hover { background: rgba(43, 82, 120, 0.8); }
+
 .msg-row { display: flex; gap: 8px; align-items: flex-end; }
 .msg-row.left { justify-content: flex-start; }
 .msg-row.right { justify-content: flex-end; }
@@ -455,12 +465,105 @@ body { background: #0e1621; }
   }
 }
 
-/* 旧模板样式（保留以兼容可能使用的类） */
-#app { height: 100vh; text-align: center; }
-#logo { display: block; width: 50%; height: 50%; margin: auto; padding: 10% 0 0; background-position: center; background-repeat: no-repeat; background-size: 100% 100%; background-origin: content-box; }
-.result { height: 20px; line-height: 20px; margin: 1.5rem auto; }
-.input-box .btn { width: 60px; height: 30px; line-height: 30px; border-radius: 3px; border: none; margin: 0 0 0 20px; padding: 0 8px; cursor: pointer; }
-.input-box .btn:hover { background-image: linear-gradient(to top, #cfd9df 0%, #e2ebf0 100%); color: #333333; }
-.input-box .input { border: none; border-radius: 3px; outline: none; height: 30px; line-height: 30px; padding: 0 10px; background-color: rgba(240, 240, 240, 1); -webkit-font-smoothing: antialiased; }
-.input-box .input:hover { border: none; background-color: rgba(255, 255, 255, 1); }
-.input-box .input:focus { border: none; background-color: rgba(255, 255, 255, 1); }
+/* 详情弹窗样式 */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  animation: fadeIn .12s ease-out;
+}
+
+.modal {
+  width: min(760px, 92vw);
+  max-height: 85vh;
+  background: linear-gradient(180deg, rgba(20, 30, 40, 0.98), rgba(18, 26, 36, 0.98));
+  color: #dce7f1;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 16px;
+  box-shadow: 0 18px 60px rgba(0,0,0,.45), 0 2px 0 rgba(255,255,255,.03) inset;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: popIn .12s ease-out;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,0));
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  color: #eaf2f9;
+}
+
+.modal-header .close {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,.10);
+  color: #dce7f1;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color .15s ease, border-color .15s ease, transform .08s ease, opacity .15s ease;
+}
+
+.modal-header .close:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,.18); }
+.modal-header .close:active { transform: translateY(1px); }
+
+.modal-content {
+  padding: 12px 16px;
+  overflow: auto;
+  background: rgba(0,0,0,0.15);
+}
+
+.modal-content pre {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #e9eef3;
+  white-space: pre-wrap;            /* 自动换行，避免横向滚动 */
+  word-break: break-word;
+}
+
+/* 弹窗动画 */
+@keyframes popIn {
+  from { transform: translateY(8px) scale(.98); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* 弹窗内部滚动条优化 */
+.modal-content::-webkit-scrollbar { width: 10px; height: 10px; }
+.modal-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+.modal-content::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+.modal-content::-webkit-scrollbar-track { background: transparent; }
+
+@media (max-width: 480px) {
+  .modal { width: 94vw; max-height: 82vh; border-radius: 14px; }
+  .modal-header { padding: 10px 12px; }
+  .modal-header h3 { font-size: 14px; }
+  .modal-content { padding: 10px 12px; }
+  .modal-content pre { font-size: 12px; line-height: 1.5; }
+}
