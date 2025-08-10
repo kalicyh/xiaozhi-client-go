@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"math"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -18,6 +21,7 @@ import (
 	// 新增: Opus 编码依赖
 	"github.com/hraban/opus"
 	"sync"
+	"sync/atomic"
 )
 
 // App struct
@@ -32,6 +36,11 @@ type App struct {
 	micBuf   []float32
 	micMu    sync.Mutex
 	micOn    bool
+
+	// 新增：并发测试运行控制
+	ltMu            sync.Mutex
+	ltCancel        context.CancelFunc
+	ltRunning       bool
 }
 
 // NewApp creates a new App application struct
@@ -395,6 +404,7 @@ func (a *App) startup(ctx context.Context) {
 
 			otaURL := getStr(kv, "url")
 			deviceID := getStr(kv, "device_id")
+			clientID := getStr(kv, "client_id")
 
 			// 处理POST body
 			var postBody map[string]interface{}
@@ -413,7 +423,7 @@ func (a *App) startup(ctx context.Context) {
 				}
 			}
 
-			if err := a.DoOTARequest(otaURL, deviceID, postBody); err != nil {
+			if err := a.DoOTARequest(otaURL, deviceID, clientID, postBody); err != nil {
 				runtime.EventsEmit(a.ctx, "error", fmt.Sprintf("OTA请求失败: %v", err))
 			}
 		}
@@ -456,6 +466,24 @@ func (a *App) startup(ctx context.Context) {
 	runtime.EventsOn(ctx, "db_clear_config", func(_ ...interface{}) {
 		_ = a.store.ClearConfig(context.Background())
 		runtime.EventsEmit(ctx, "config", map[string]string{})
+	})
+
+	// 并发测试：启动
+	runtime.EventsOn(ctx, "loadtest_start", func(args ...interface{}) {
+		if len(args) != 1 {
+			runtime.EventsEmit(a.ctx, "error", "loadtest_start: invalid args")
+			return
+		}
+		payload, ok := args[0].(map[string]any)
+		if !ok {
+			runtime.EventsEmit(a.ctx, "error", "loadtest_start: invalid payload")
+			return
+		}
+		a.startLoadTest(payload)
+	})
+	// 并发测试：停止
+	runtime.EventsOn(ctx, "loadtest_stop", func(_ ...interface{}) {
+		a.stopLoadTest()
 	})
 }
 
@@ -565,8 +593,8 @@ type OTAResponse struct {
 	} `json:"websocket"`
 }
 
-// DoOTARequest 执行OTA POST请求并打印响应数据
-func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interface{}) error {
+// DoOTARequest 执行OTA POST请求并打印响应数据（支持可选 Client-Id）
+func (a *App) DoOTARequest(otaURL, deviceID, clientID string, postBody map[string]interface{}) error {
 	log := logging.L().With("module", "ota")
 	// 构造请求体
 	bodyBytes, err := json.Marshal(postBody)
@@ -586,9 +614,12 @@ func (a *App) DoOTARequest(otaURL, deviceID string, postBody map[string]interfac
 	if deviceID != "" {
 		req.Header.Set("Device-Id", deviceID)
 	}
+	if clientID != "" {
+		req.Header.Set("Client-Id", clientID)
+	}
 
 	// 打印请求信息（分级日志）
-	log.Info("OTA 请求", "url", otaURL, "device_id", deviceID)
+	log.Info("OTA 请求", "url", otaURL, "device_id", deviceID, "client_id", clientID)
 	log.Debug("OTA 请求体", "body", string(bodyBytes))
 
 	// 发送请求
@@ -703,4 +734,282 @@ func (a *App) GetDefaultDeviceID() string {
 	// 直接利用 client.DefaultConfig() 中的默认逻辑
 	cfg := client.DefaultConfig()
 	return cfg.DeviceID
+}
+
+// ==== 并发测试实现 ====
+type ltStats struct {
+	Count int     `json:"count"`
+	Min   float64 `json:"min"`
+	Avg   float64 `json:"avg"`
+	P50   float64 `json:"p50"`
+	P90   float64 `json:"p90"`
+	P95   float64 `json:"p95"`
+	P99   float64 `json:"p99"`
+	Max   float64 `json:"max"`
+}
+
+func makeLTStats(values []float64) ltStats {
+	if len(values) == 0 { return ltStats{} }
+	sort.Float64s(values)
+	sum := 0.0
+	for _, v := range values { sum += v }
+	pick := func(p float64) float64 {
+		if len(values) == 0 { return 0 }
+		idx := int(math.Ceil((p/100.0)*float64(len(values)))) - 1
+		if idx < 0 { idx = 0 }
+		if idx >= len(values) { idx = len(values)-1 }
+		return values[idx]
+	}
+	return ltStats{
+		Count: len(values),
+		Min:   values[0],
+		Avg:   sum/float64(len(values)),
+		P50:   pick(50),
+		P90:   pick(90),
+		P95:   pick(95),
+		P99:   pick(99),
+		Max:   values[len(values)-1],
+	}
+}
+
+type ltSummary struct {
+	Protocol        string        `json:"protocol"`
+	Concurrency     int           `json:"concurrency"`
+	RequestsPerConn int           `json:"requests_per_conn"`
+	TotalRequests   int           `json:"total_requests"`
+	ConnectOK       int64         `json:"connect_ok"`
+	ConnectFail     int64         `json:"connect_fail"`
+	ReqOK           int64         `json:"req_ok"`
+	ReqTimeout      int64         `json:"req_timeout"`
+	Errors          int64         `json:"errors"`
+	Closed          int64         `json:"closed"`
+	HelloLatencyMs  ltStats       `json:"hello_latency_ms"`
+	RespLatencyMs   ltStats       `json:"resp_latency_ms"`
+	DurationMs      int64         `json:"duration_ms"`
+	Done            bool          `json:"done"`
+}
+
+func (a *App) startLoadTest(payload map[string]any) {
+	a.ltMu.Lock()
+	if a.ltRunning {
+		a.ltMu.Unlock()
+		runtime.EventsEmit(a.ctx, "error", "已有并发测试在运行")
+		return
+	}
+	a.ltRunning = true
+	a.ltMu.Unlock()
+
+	// 解析参数（容错）
+	getS := func(k, def string) string { if v, ok := payload[k]; ok { return fmt.Sprint(v) }; return def }
+	getI := func(k string, def int) int {
+		if v, ok := payload[k]; ok {
+			switch t := v.(type) {
+			case float64:
+				return int(t)
+			case int:
+				return t
+			case json.Number:
+				if iv, err := t.Int64(); err == nil { return int(iv) }
+			case string:
+				var x int
+				if _, err := fmt.Sscan(t, &x); err == nil { return x }
+			}
+		}
+		return def
+	}
+	getD := func(k string, def time.Duration) time.Duration {
+		if v, ok := payload[k]; ok {
+			switch t := v.(type) {
+			case float64:
+				return time.Duration(t) * time.Millisecond
+			case int:
+				return time.Duration(t) * time.Millisecond
+			case string:
+				if strings.HasSuffix(t, "ms") || strings.HasSuffix(t, "s") || strings.HasSuffix(t, "m") {
+					if d, err := time.ParseDuration(t); err == nil { return d }
+				} else {
+					if n, err := fmt.Sscanf(t, "%d", new(int)); err == nil && n > 0 { /* ignore */ }
+				}
+			}
+		}
+		return def
+	}
+
+	protocol := strings.ToLower(getS("protocol", "ws"))
+	conc := getI("concurrency", 10)
+	perConn := getI("per_conn", 10)
+	message := getS("message", "hello")
+	helloTO := getD("hello_timeout_ms", 10*time.Second)
+	respTO := getD("resp_timeout_ms", 10*time.Second)
+
+	cfg := client.DefaultConfig()
+	cfg.ProtocolVersion = 3
+	cfg.HelloTimeout = helloTO
+	cfg.EnableToken = getS("token", "") != ""
+	cfg.AuthToken = getS("token", "")
+	cfg.TokenMethod = getS("token_method", "header")
+	if v := getS("client_id", ""); v != "" { cfg.ClientID = v }
+	if v := getS("device_id", ""); v != "" { cfg.DeviceID = strings.ToLower(v) }
+	switch protocol {
+	case "ws", "websocket":
+		cfg.WebsocketURL = getS("ws", "")
+		if cfg.WebsocketURL == "" {
+			runtime.EventsEmit(a.ctx, "error", "并发测试: 缺少 WebSocket URL")
+			a.stopLoadTest()
+			return
+		}
+	case "mqtt":
+		cfg.MQTTBroker = getS("broker", "")
+		cfg.MQTTUsername = getS("username", "")
+		cfg.MQTTPassword = getS("password", "")
+		cfg.MQTTPublishTopic = getS("pub", cfg.MQTTPublishTopic)
+		cfg.MQTTSubscribeTopic = getS("sub", cfg.MQTTSubscribeTopic)
+		cfg.MQTTKeepAliveSec = getI("keepalive", cfg.MQTTKeepAliveSec)
+		if cfg.MQTTBroker == "" {
+			runtime.EventsEmit(a.ctx, "error", "并发测试: 缺少 MQTT broker")
+			a.stopLoadTest()
+			return
+		}
+	default:
+		runtime.EventsEmit(a.ctx, "error", "并发测试: 不支持的协议")
+		a.stopLoadTest()
+		return
+	}
+
+	// 共享统计
+	var (
+		connectOK int64
+		connectNG int64
+		reqOK     int64
+		reqTO     int64
+		errCnt    int64
+		closedCnt int64
+		muHello   sync.Mutex
+		muResp    sync.Mutex
+		hellos    []float64
+		resps     []float64
+		doneReq   int64
+		totalReq  = conc * perConn
+	)
+
+	// 上下文取消
+	ctx2, cancel := context.WithCancel(context.Background())
+	a.ltMu.Lock(); a.ltCancel = cancel; a.ltMu.Unlock()
+
+	startAt := time.Now()
+	// 进度上报协程
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx2.Done():
+				return
+			case <-ticker.C:
+				runtime.EventsEmit(a.ctx, "loadtest_progress", map[string]any{
+					"protocol": protocol,
+					"connect_ok": connectOK,
+					"connect_fail": connectNG,
+					"req_ok": reqOK,
+					"req_timeout": reqTO,
+					"errors": errCnt,
+					"closed": closedCnt,
+					"done": atomic.LoadInt64(&doneReq),
+					"total": totalReq,
+					"elapsed_ms": time.Since(startAt).Milliseconds(),
+				})
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(conc)
+	for i := 0; i < conc; i++ {
+		go func(worker int) {
+			defer wg.Done()
+			cfgW := cfg
+			if cfgW.ClientID == "" {
+				cfgW.ClientID = fmt.Sprintf("loadtest-%d-%d", time.Now().UnixNano(), worker)
+			}
+			c := client.New(cfgW)
+			respCh := make(chan struct{}, 16)
+			c.OnBinary = func(ctx context.Context, data []byte) {}
+			c.OnClosed = func() { atomic.AddInt64(&closedCnt, 1) }
+			c.OnError = func(ctx context.Context, err error) { atomic.AddInt64(&errCnt, 1) }
+			c.OnJSON = func(ctx context.Context, msg map[string]any) {
+				if t, ok := msg["type"].(string); ok {
+					if t == "hello" { return }
+					select { case respCh <- struct{}{}: default: }
+					return
+				}
+				if _, ok := msg["text"]; ok { select { case respCh <- struct{}{}: default: }; return }
+				if _, ok := msg["content"]; ok { select { case respCh <- struct{}{}: default: }; return }
+			}
+
+			// 连接
+			t0 := time.Now()
+			if err := c.Open(ctx2, protocol); err != nil {
+				atomic.AddInt64(&connectNG, 1)
+				return
+			}
+			muHello.Lock(); hellos = append(hellos, float64(time.Since(t0).Milliseconds())); muHello.Unlock()
+			atomic.AddInt64(&connectOK, 1)
+
+			// 请求循环
+			for j := 0; j < perConn; j++ {
+				select { case <-ctx2.Done(): return; default: }
+				// 清空旧响应
+				for { select { case <-respCh: continue; default: break }
+					break }
+				t1 := time.Now()
+				_ = c.SendListenStart(context.Background(), "ptt")
+				_ = c.SendDetectText(context.Background(), fmt.Sprintf("%s #%d.%d", message, worker, j))
+				select {
+				case <-respCh:
+					muResp.Lock(); resps = append(resps, float64(time.Since(t1).Milliseconds())); muResp.Unlock()
+					atomic.AddInt64(&reqOK, 1)
+				case <-time.After(respTO):
+					atomic.AddInt64(&reqTO, 1)
+				case <-ctx2.Done():
+					return
+				}
+				_ = c.SendListenStop(context.Background(), "ptt")
+				atomic.AddInt64(&doneReq, 1)
+			}
+			c.Close()
+		}(i)
+	}
+
+	go func() {
+		wg.Wait()
+		cancel()
+		// 汇总
+		sum := ltSummary{
+			Protocol:        protocol,
+			Concurrency:     conc,
+			RequestsPerConn: perConn,
+			TotalRequests:   totalReq,
+			ConnectOK:       connectOK,
+			ConnectFail:     connectNG,
+			ReqOK:           reqOK,
+			ReqTimeout:      reqTO,
+			Errors:          errCnt,
+			Closed:          closedCnt,
+			HelloLatencyMs:  makeLTStats(hellos),
+			RespLatencyMs:   makeLTStats(resps),
+			DurationMs:      time.Since(startAt).Milliseconds(),
+			Done:            true,
+		}
+		runtime.EventsEmit(a.ctx, "loadtest_done", sum)
+		a.ltMu.Lock(); a.ltRunning = false; a.ltCancel = nil; a.ltMu.Unlock()
+	}()
+}
+
+func (a *App) stopLoadTest() {
+	a.ltMu.Lock()
+	cancel := a.ltCancel
+	a.ltCancel = nil
+	a.ltRunning = false
+	a.ltMu.Unlock()
+	if cancel != nil { cancel() }
 }

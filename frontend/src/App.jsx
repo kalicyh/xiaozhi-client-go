@@ -6,13 +6,54 @@ import AudioPlayer from './audio/AudioPlayer.js'
 import SettingsPage from './components/SettingsPage.jsx'
 import CustomTitleBar from './components/CustomTitleBar.jsx'
 import './components/SettingsPage.css'
+// 新增：并发测试页面
+import LoadTest from './components/LoadTest.jsx'
 // 新增：麦克风录音器
 import MicRecorder from './audio/MicRecorder.js'
+
+// 布尔值容错转换（支持 true/false、'true'/'false'、1/0、'1'/'0'、'yes'/'no'、'on'/'off'）
+function toBool(v) {
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'number') return v !== 0
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase()
+    return s === 'true' || s === '1' || s === 'yes' || s === 'on'
+  }
+  return !!v
+}
+
+// 基础 HTML 转义（并将换行替换为 <br/> 以保留多行显示）
+function escapeHtml(input) {
+  const s = String(input ?? '')
+  const escaped = s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\"/g, '&quot;')
+  return escaped.replace(/\n/g, '<br/>')
+}
 
 // 安全包装：在浏览器直开或未通过 Wails 运行时，window.runtime 可能不存在
 const RT = typeof window !== 'undefined' && window.runtime
 const EOn = RT ? EventsOn : (event, cb) => { console.warn('[Mock] EventsOn', event); return () => {} }
 const EEmit = RT ? EventsEmit : (...args) => { console.warn('[Mock] EventsEmit', args) }
+
+// 一次性事件等待工具：等待指定事件一次并返回其数据，带超时
+function onceEvent(eventName, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    let off = null
+    let timer = null
+    const cleanup = () => { if (off) { off(); off = null } ; if (timer) { clearTimeout(timer); timer = null } }
+    try {
+      off = EOn(eventName, (payload) => { cleanup(); resolve(payload) })
+      if (timeoutMs > 0) {
+        timer = setTimeout(() => { cleanup(); reject(new Error(`${eventName} 等待超时`)) }, timeoutMs)
+      }
+    } catch (e) {
+      cleanup(); reject(e)
+    }
+  })
+}
 
 function Message({ role, text, time, detail, onShowDetail, avatar }) {
   if (role === 'system') {
@@ -111,7 +152,7 @@ function InputBar({ onSend, onPTTStart, onPTTStop, recording, pttTime }) {
 function App() {
   const [messages, setMessages] = useState([])
   const [recording, setRecording] = useState(false)
-  const [currentPage, setCurrentPage] = useState('chat') // 'chat' | 'settings' | 'db'
+  const [currentPage, setCurrentPage] = useState('chat') // 'chat' | 'settings' | 'db' | 'loadtest'
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight })
   // 新增：麦克风录音器引用
   const micRef = useRef(null)
@@ -761,39 +802,20 @@ function App() {
           }
           // 覆盖 uuid 为当前设备ID（系统MAC或输入的MAC）
           if (effectiveDeviceId) { bodyObj.uuid = effectiveDeviceId }
-          const headers = {
-            'Content-Type': 'application/json',
-            'Accept': '*/*',
-            'User-Agent': 'xiaozhi-client-go/desktop',
-            'Activation-Version': '2',
-          }
-          if (effectiveDeviceId) headers['Device-Id'] = effectiveDeviceId
-          if (f.client_id) headers['Client-Id'] = f.client_id
-          const res = await fetch(f.ota_url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(bodyObj),
-            cache: 'no-store'
-          })
-          // 改进：当返回非 2xx 时读取响应文本，便于诊断
-          if (!res.ok) {
-            let errText = ''
-            try { errText = await res.text() } catch { /* ignore */ }
-            const err = new Error(`HTTP ${res.status}${errText ? ' · ' + errText.slice(0, 512) : ''}`)
-            err._detail = errText
-            throw err
-          }
-          const data = await res.json()
-          const wsUrl = data?.websocket?.url
+          // 通过后端代理 OTA 请求，规避浏览器跨域限制
+          EEmit('ota_request', { url: f.ota_url, device_id: effectiveDeviceId, client_id: f.client_id || '', body: bodyObj })
+          const ota = await onceEvent('ota_response', 30000)
+          const raw = ota?.raw_response || ''
+          let data = null
+          try { data = raw ? JSON.parse(raw) : null } catch {}
+          const wsUrl = ota?.websocket_url || data?.websocket?.url
           if (!wsUrl) throw new Error('OTA 响应缺少 websocket.url')
           resolved.ws = wsUrl
-          // 若 OTA 同时提供 token，则一并使用
-          const wsToken = data?.websocket?.token
+          const wsToken = ota?.token || data?.websocket?.token
           if (wsToken) resolved.token = wsToken
         } catch (e) {
           setConnecting(false)
           setCurrentPage('settings')
-          // 使用 system 气泡并附带可点击的详细信息
           const msg = `OTA 获取失败：${escapeHtml(e?.message || String(e))}`
           const detail = e?._detail || e?.stack || String(e)
           appendMsg('system', msg, detail)
@@ -815,31 +837,13 @@ function App() {
               throw new Error('OTA POST内容不是有效的 JSON')
             }
           }
-          // 覆盖 uuid 为当前设备ID（系统MAC或输入的MAC）
           if (effectiveDeviceId) { bodyObj.uuid = effectiveDeviceId }
-          const headers = {
-            'Content-Type': 'application/json',
-            'Accept': '*/*',
-            'User-Agent': 'xiaozhi-client-go/desktop',
-            'Activation-Version': '2',
-          }
-          if (effectiveDeviceId) headers['Device-Id'] = effectiveDeviceId
-          if (f.client_id) headers['Client-Id'] = f.client_id
-          const res = await fetch(f.ota_url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(bodyObj),
-            cache: 'no-store'
-          })
-          // 改进：当返回非 2xx 时读取响应文本，便于诊断
-          if (!res.ok) {
-            let errText = ''
-            try { errText = await res.text() } catch { /* ignore */ }
-            const err = new Error(`HTTP ${res.status}${errText ? ' · ' + errText.slice(0, 512) : ''}`)
-            err._detail = errText
-            throw err
-          }
-          const data = await res.json()
+          // 通过后端代理 OTA 请求，规避浏览器跨域限制
+          EEmit('ota_request', { url: f.ota_url, device_id: effectiveDeviceId, client_id: f.client_id || '', body: bodyObj })
+          const ota = await onceEvent('ota_response', 30000)
+          const raw = ota?.raw_response || ''
+          let data = null
+          try { data = raw ? JSON.parse(raw) : null } catch {}
           const mq = data?.mqtt || data?.MQTT
           if (!mq) throw new Error('OTA 响应缺少 mqtt 字段')
 
@@ -851,7 +855,6 @@ function App() {
           let sub = mq.subscribe_topic || mq.sub || ''
           const qos = mq.qos ?? resolved.qos
           const keep_alive = mq.keep_alive ?? mq.keepalive ?? resolved.keep_alive
-          // 兼容字符串 "null"
           if (String(sub).toLowerCase() === 'null') sub = ''
 
           resolved = {
@@ -862,9 +865,7 @@ function App() {
             pub: pub || resolved.pub,
             sub: sub || resolved.sub,
             client_id: mq.client_id || resolved.client_id,
-            // 如 OTA 也携带 token，可复用
             token: mq.token || resolved.token,
-            // 额外持久化字段
             port: port ?? resolved.port,
             qos,
             keep_alive,
@@ -872,7 +873,6 @@ function App() {
         } catch (e) {
           setConnecting(false)
           setCurrentPage('settings')
-          // 使用 system 气泡并附带可点击的详细信息
           const msg = `OTA 获取失败：${escapeHtml(e?.message || String(e))}`
           const detail = e?._detail || e?.stack || String(e)
           appendMsg('system', msg, detail)
@@ -935,6 +935,7 @@ function App() {
         audioStats={audioStats}
         onToggleSettings={() => setCurrentPage(currentPage === 'settings' ? 'chat' : 'settings')}
         onOpenDB={() => setCurrentPage(currentPage === 'db' ? 'chat' : 'db')}
+        onOpenLoadTest={() => setCurrentPage(currentPage === 'loadtest' ? 'chat' : 'loadtest')}
       />
       <div className="chat">
         {!RT && (
@@ -958,6 +959,24 @@ function App() {
         />
       ) : currentPage === 'db' ? (
         <DBManager onBack={() => setCurrentPage('chat')} />
+      ) : currentPage === 'loadtest' ? (
+        <LoadTest 
+          onBack={() => setCurrentPage('chat')} 
+          defaults={{
+            protocol: form.protocol,
+            ws: form.ws,
+            broker: form.broker,
+            username: form.username,
+            password: form.password,
+            pub: form.pub,
+            sub: form.sub,
+            keepalive: form.keep_alive || 240,
+            token: form.token,
+            token_method: form.token_method,
+            client_id: form.client_id,
+            device_id: toBool(form.use_system_mac) ? (form.system_mac || '') : (form.device_id || ''),
+          }}
+        />
       ) : (
         <>
           {/* 头部已融合到 CustomTitleBar */}
@@ -1274,28 +1293,6 @@ function normalizeMQTTBroker(endpoint, preferTLS = true, portOverride) {
   const finalPort = String(portOverride || portPart || defaultPort)
   const scheme = preferTLS ? 'ssl' : 'tcp'
   return `${scheme}://${hostPart}${finalPort ? ':' + finalPort : ''}`
-}
-
-// 布尔值容错转换（支持 true/false、'true'/'false'、1/0、'1'/'0'、'yes'/'no'、'on'/'off'）
-function toBool(v) {
-  if (typeof v === 'boolean') return v
-  if (typeof v === 'number') return v !== 0
-  if (typeof v === 'string') {
-    const s = v.trim().toLowerCase()
-    return s === 'true' || s === '1' || s === 'yes' || s === 'on'
-  }
-  return !!v
-}
-
-// 基础 HTML 转义（并将换行替换为 <br/> 以保留多行显示）
-function escapeHtml(input) {
-  const s = String(input ?? '')
-  const escaped = s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;')
-  return escaped.replace(/\n/g, '<br/>')
 }
 
 export default App

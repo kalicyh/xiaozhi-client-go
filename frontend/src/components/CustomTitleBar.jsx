@@ -14,6 +14,7 @@ function CustomTitleBar({
   audioStats = null,
   onToggleSettings = null,
   onOpenDB = null,
+  onOpenLoadTest = null,
 }) {
   const [isMaximized, setIsMaximized] = useState(false)
 
@@ -65,8 +66,8 @@ function CustomTitleBar({
 
         <div className="titlebar-spacer" />
 
-        {/* 工具按钮区域（数据库 + 设置），需不可拖拽 */}
-        {(onOpenDB || onToggleSettings) && (
+        {/* 工具按钮区域（数据库 + 设置 + 压测），需不可拖拽 */}
+        {(onOpenDB || onToggleSettings || onOpenLoadTest) && (
           <div className="toolbar-actions" data-no-drag>
             {onOpenDB && (
               <button
@@ -75,6 +76,15 @@ function CustomTitleBar({
                 onClick={onOpenDB}
               >
                 🗄️
+              </button>
+            )}
+            {onOpenLoadTest && (
+              <button
+                className="icon-btn"
+                title="并发测试"
+                onClick={onOpenLoadTest}
+              >
+                🧪
               </button>
             )}
             {onToggleSettings && (
