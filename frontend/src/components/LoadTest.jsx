@@ -77,6 +77,25 @@ function computeActualTotals(summary, progress) {
   return { planned, actual, elapsed }
 }
 
+// 当手动停止时，使用当前进度构造一个临时 summary，便于立即展示结果
+function makeSummaryFromProgress(progress, protocol) {
+  if (!progress) return null
+  return {
+    protocol: protocol || 'ws',
+    total_requests: typeof progress.total === 'number' ? progress.total : (progress.done || 0),
+    total: typeof progress.total === 'number' ? progress.total : undefined,
+    done: progress.done,
+    duration_ms: progress.elapsed_ms || 0,
+    req_ok: progress.req_ok || 0,
+    req_timeout: progress.req_timeout || 0,
+    errors: progress.errors || 0,
+    connect_ok: progress.connect_ok || 0,
+    connect_fail: progress.connect_fail || 0,
+    hello_latency_ms: progress.hello_latency_ms || {},
+    resp_latency_ms: progress.resp_latency_ms || {},
+  }
+}
+
 function friendlySummary(summary, progress) {
   if (!summary) return ''
   const { planned, actual, elapsed } = computeActualTotals(summary, progress)
@@ -134,11 +153,16 @@ export default function LoadTest({ onBack, defaults }) {
   const [summary, setSummary] = useState(null)
   const [showRaw, setShowRaw] = useState(false)
   const [showToken, setShowToken] = useState(false)
+  const [peakOnline, setPeakOnline] = useState(0)
   const offRef = useRef({})
 
   useEffect(() => {
     const off1 = EventsOn('loadtest_progress', (m) => {
-      setProgress(typeof m === 'string' ? JSON.parse(m) : m)
+      const obj = typeof m === 'string' ? JSON.parse(m) : m
+      // 更新峰值在线数 = max(peakOnline, connect_ok - closed)
+      const cur = Math.max(0, (obj?.connect_ok || 0) - (obj?.closed || 0))
+      setPeakOnline((prev) => (cur > prev ? cur : prev))
+      setProgress(obj)
     })
     const off2 = EventsOn('loadtest_done', (m) => {
       const obj = typeof m === 'string' ? JSON.parse(m) : m
@@ -153,10 +177,17 @@ export default function LoadTest({ onBack, defaults }) {
     setSummary(null)
     setProgress(null)
     setShowRaw(false)
+  setPeakOnline(0)
     setRunning(true)
     EventsEmit('loadtest_start', form)
   }
-  const stop = () => { EventsEmit('loadtest_stop'); setRunning(false) }
+  const stop = () => {
+    // 先生成临时总结，确保手动停止后也能看到结果
+    const s = makeSummaryFromProgress(progress, form.protocol)
+    if (s) setSummary(s)
+    EventsEmit('loadtest_stop')
+    setRunning(false)
+  }
 
   const calc = useMemo(() => {
     const s = summary
@@ -338,6 +369,8 @@ export default function LoadTest({ onBack, defaults }) {
                 <Stat label="请求 OK/超时" value={`${progress.req_ok || 0} / ${progress.req_timeout || 0}`} />
                 <Stat label="错误/关闭" value={`${progress.errors || 0} / ${progress.closed || 0}`} />
                 <Stat label="耗时(ms)" value={progress.elapsed_ms || 0} />
+                <Stat label="同时在线" value={Math.max(0, (progress.connect_ok||0) - (progress.closed||0))} />
+                <Stat label="峰值在线" value={peakOnline} />
               </div>
             </div>
           )}
@@ -349,6 +382,8 @@ export default function LoadTest({ onBack, defaults }) {
                 <Badge text={`成功率 ${calc.okRate}%`} color={calc.okColor} />
                 <Badge text={`吞吐 ${calc.rps} req/s`} />
                 <Badge text={`总耗时 ${calc.durationMs} ms`} />
+                {progress && <Badge text={`在线 ${Math.max(0, (progress.connect_ok||0) - (progress.closed||0))}`} />}
+                <Badge text={`峰值在线 ${peakOnline}`} />
                 {calc.stopped && <Badge text={'已停止（按实际完成数统计）'} color="#caa93a" />}
               </div>
 

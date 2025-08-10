@@ -813,6 +813,21 @@ function App() {
           resolved.ws = wsUrl
           const wsToken = ota?.token || data?.websocket?.token
           if (wsToken) resolved.token = wsToken
+
+          // 新增：OTA 成功后，追加系统气泡，点击可查看原始返回；如包含激活码则由机器人返回
+          try {
+            const brief = `OTA 成功 · WebSocket: ${escapeHtml(String(wsUrl))}${wsToken ? ' · Token 已下发' : ''}`
+            const detail = raw || JSON.stringify(data ?? ota ?? {}, null, 2)
+            appendMsg('system', brief, detail)
+            const act = (data && (data.activation || data.Activation)) || (ota && (ota.activation || ota.Activation))
+            const code = act && (act.code || act.activation_code || act.Code)
+            if (code) {
+              const rawCode = String(code)
+              const safeCode = rawCode.replace(/[^0-9A-Za-z\-]/g, '')
+              const html = `🔑 激活码：<span style="font-size:22px;font-weight:700;letter-spacing:3px;">${escapeHtml(safeCode)}</span>`
+              appendMsg('system', html)
+            }
+          } catch {}
         } catch (e) {
           setConnecting(false)
           setCurrentPage('settings')
@@ -870,6 +885,21 @@ function App() {
             qos,
             keep_alive,
           }
+
+          // 新增：OTA 成功后，追加系统气泡，点击可查看原始返回；如包含激活码则由机器人返回
+          try {
+            const brief = `OTA 成功 · MQTT: ${escapeHtml(String(endpoint))} · pub: ${escapeHtml(String(pub || ''))}${sub ? ' · sub: ' + escapeHtml(String(sub)) : ''}`
+            const detail = raw || JSON.stringify(data ?? ota ?? {}, null, 2)
+            appendMsg('system', brief, detail)
+            const act = (data && (data.activation || data.Activation)) || (ota && (ota.activation || ota.Activation))
+            const code = act && (act.code || act.activation_code || act.Code)
+            if (code) {
+              const rawCode = String(code)
+              const safeCode = rawCode.replace(/[^0-9A-Za-z\-]/g, '')
+              const html = `🔑 激活码：<span style="font-size:22px;font-weight:700;letter-spacing:3px;">${escapeHtml(safeCode)}</span>`
+              appendMsg('system', html)
+            }
+          } catch {}
         } catch (e) {
           setConnecting(false)
           setCurrentPage('settings')
