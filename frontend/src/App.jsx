@@ -455,6 +455,11 @@ function App() {
       if (pttExpectUserFirstRef.current && plain) {
         pttExpectUserFirstRef.current = false
         if (pttFirstTimeoutRef.current) { clearTimeout(pttFirstTimeoutRef.current); pttFirstTimeoutRef.current = null }
+        // 若为“单个表情”，则作为头像而不生成用户气泡
+        if (isEmojiOnly(plain)) {
+          pendingAvatarRef.current = plain
+          return
+        }
         appendMsg('user', escapeHtml(display))
         // 同步后续拦截逻辑，仿照键入发送
         lastUserMsgRef.current = plain
@@ -711,9 +716,16 @@ function App() {
   }
 
   const onSend = (text) => {
+    const trimmed = String(text).trim()
+    // 若发送内容为“单个表情”，用作下一条机器人的头像，不作为普通消息发送
+    if (isEmojiOnly(trimmed)) {
+      pendingAvatarRef.current = trimmed
+      return
+    }
+
     appendMsg('user', escapeHtml(text))
     // 记录最近用户文本并设置拦截配额；清空待用头像
-    lastUserMsgRef.current = String(text).trim()
+    lastUserMsgRef.current = trimmed
     interceptQuotaRef.current = 2
     interceptWindowRef.current = 2
     pendingAvatarRef.current = null
@@ -1275,10 +1287,21 @@ function DBManager({ onBack }) {
 // 简易“纯表情”识别：若整条文本仅包含 1 个表情图形（含变体），则视为表情
 function isEmojiOnly(s) {
   if (!s) return false
+  // 去除允许的不可见连接符与变体选择器，保留零宽连接序列
+  const str = String(s).trim()
+  // 1) 优先使用 Unicode 属性与 ZWJ 支持的正则：单个“表情簇”（含肤色、性别、ZWJ 合成）
   try {
-    if (/^\p{Extended_Pictographic}(\uFE0F|\uFE0E)?$/u.test(s)) return true
-  } catch (_) { /* 属性不支持时走回退 */ }
-  return /^[\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{2600}-\u{27BF}]\uFE0F?$/u.test(s)
+    // 一个或多个 Extended_Pictographic，由 ZWJ 连接；可带变体选择器；允许 keycap 组合
+    const emojiCluster = /^(?:\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)*|[\u0030-\u0039#*]\uFE0F?\u20E3|\p{Regional_Indicator}{2})$/u
+    if (emojiCluster.test(str)) return true
+  } catch (_) {
+    // 2) 回退：常见表情块 + 变体 + ZWJ 简化匹配
+    const basic = /^(?:[\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{2600}-\u{27BF}])(?:\uFE0F)?(?:\u200D(?:[\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{2600}-\u{27BF}])(?:\uFE0F)?)*$/u
+    const keycap = /^[0-9#*]\uFE0F?\u20E3$/u
+    const flag = /^[\u{1F1E6}-\u{1F1FF}]{2}$/u
+    if (basic.test(str) || keycap.test(str) || flag.test(str)) return true
+  }
+  return false
 }
 
 // 规范化 MQTT Broker 地址：补齐协议与端口（支持端口覆盖与 IPv6）
