@@ -2,6 +2,10 @@
 
 基于 Wails v2 开发的跨平台小智语音助手客户端，支持 WebSocket 和 MQTT+UDP 双协议通信。
 
+[Go版本后端](https://github.com/AnimeAIChat/xiaozhi-server-go)
+
+<img width="1024" height="768" alt="image" src="https://github.com/user-attachments/assets/1b93104f-a042-46df-9f6f-95af7c87fac2" />
+
 ## 🚀 功能特性
 
 ### 📡 双协议支持
@@ -317,6 +321,8 @@ ws hello payload={"type":"hello","version":1,...}
 
 ## 🙏 致谢
 
+- [虾哥](https://github.com/78)
+- [Eric](https://github.com/Eric0308)
 - [Wails](https://wails.io/) - 优秀的 Go + Web 前端框架
 - [React](https://reactjs.org/) - 用户界面构建库
 - [Vite](https://vitejs.dev/) - 快速的前端构建工具
