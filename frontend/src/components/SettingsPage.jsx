@@ -3,7 +3,7 @@ import { GetSystemVolume, SetSystemVolume, IsSystemVolumeSupported } from '../..
 import { EventsEmit } from '../../wailsjs/runtime/runtime'
 import './SettingsPage.css'
 
-function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audioPlayer, onBack, connectionStatus, windowSize: propWindowSize }) {
+function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audioPlayer, onBack, connectionStatus, windowSize: propWindowSize, onResetDefaults }) {
   const [volume, setVolume] = useState(100) // 添加音量状态
   const [systemVolumeSupported, setSystemVolumeSupported] = useState(false)
   const [useSystemVolume, setUseSystemVolume] = useState(true) // 是否使用系统音量
@@ -166,6 +166,19 @@ function SettingsPage({ form, setForm, onConnect, onDisconnect, connecting, audi
       <div className="settings-content">
         <div className="settings-section">
           <h3>连接配置</h3>
+          <div className="section-actions">
+            <button
+              className="reset-btn"
+              title="恢复默认设置"
+              onClick={() => {
+                if (!onResetDefaults) return
+                const ok = window.confirm('确定要恢复默认设置吗？这将覆盖当前未保存的更改。')
+                if (ok) onResetDefaults()
+              }}
+            >
+              恢复默认
+            </button>
+          </div>
           
           <div className="row">
             <label>协议</label>

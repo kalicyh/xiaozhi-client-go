@@ -121,6 +121,28 @@
   border-bottom: 1px solid rgba(43, 82, 120, 0.3);
 }
 
+/* 区块内小动作区域（如重置） */
+.section-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 8px 0;
+}
+
+.reset-btn {
+  background: rgba(255,255,255,0.05);
+  color: #e9eef3;
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.reset-btn:hover {
+  background: rgba(255,255,255,0.1);
+}
+
 /* 表单行 */
 .settings-section .row {
   display: flex;

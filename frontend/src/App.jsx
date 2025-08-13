@@ -156,7 +156,7 @@ function App() {
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight })
   // 新增：麦克风录音器引用
   const micRef = useRef(null)
-  const [form, setForm] = useState(() => ({
+  const makeDefaultForm = () => ({
     protocol: 'ws',
     ws: 'ws://127.0.0.1:8000',
     use_ota: true,
@@ -178,10 +178,11 @@ function App() {
       board: {
         type: 'xiaozhi-client-go'
       }
-
     }, null, 2),
     broker: '', pub: 'devices/+/tx', sub: 'devices/+/rx', username: '', password: '', client_id: '', device_id: '', token: '', token_method: 'header'
-  }))
+  })
+
+  const [form, setForm] = useState(() => makeDefaultForm())
   const [pttTime, setPttTime] = useState(0)
   const [connecting, setConnecting] = useState(false)
   const [subtitle, setSubtitle] = useState('离线')
@@ -950,6 +951,22 @@ function App() {
 
   const handleDisconnect = () => { EEmit('disconnect') }
 
+  // 重置为默认设置（并尝试获取系统默认设备ID），随后持久化
+  const resetToDefaults = async () => {
+    const defaults = makeDefaultForm()
+    setForm(defaults)
+    try {
+      const fn = window?.go?.main?.App?.GetDefaultDeviceID
+      if (typeof fn === 'function') {
+        const mac = await fn()
+        if (mac) {
+          setForm(s => ({ ...s, system_mac: mac }))
+        }
+      }
+    } catch (_) { /* 忽略失败 */ }
+    try { EventsEmit('save_config', defaults) } catch (_) {}
+  }
+
   // 自动同步 OTA 请求体中的 uuid 与 mac_address 到当前设备ID
   useEffect(() => {
     const effectiveDeviceId = toBool(form.use_system_mac) ? (form.system_mac || '') : (form.device_id || '')
@@ -998,6 +1015,7 @@ function App() {
           connectionStatus={subtitle}
           onBack={() => setCurrentPage('chat')}
           windowSize={windowSize}
+          onResetDefaults={resetToDefaults}
         />
       ) : currentPage === 'db' ? (
         <DBManager onBack={() => setCurrentPage('chat')} />
